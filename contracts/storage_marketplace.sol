@@ -2,16 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
-contract PSTToken is ERC20 {
-    constructor(uint256 initialSupply) ERC20("PSTToken", "PST") {
-        _mint(msg.sender, initialSupply);
-    }
-}
+import "./pst.sol";
 
 
 contract StorageExchange {
     PSTToken public pstToken;
+
     struct StorageSupplier {
         address ceo;//可以修改地址
         address cfo;//可以提现，挂单
@@ -537,7 +533,37 @@ contract StorageExchange {
         }
     
         SystemState storage start_state = all_system_states[startPeriod];
+        if(usage.status == UsageStatus.Ended) {
+            uint64 endPeriod = usage.endPeriod;
+            if(startPeriod == endPeriod) {
+                return;
+            }
 
+            SystemState storage end_state = all_system_states[endPeriod];
+            //供应商提取的是1）buyer按比例的费用 2)算力奖励 3)保证金
+            //buyer提取的是：算力奖励
+            uint256 supplierIncome = _calcTotalPrice(endPeriod - startPeriod, order.pricePerPST, usage.size);
+            uint256 supplierDeposit = _calcDeposit(supplierIncome,order.guaranteeRatio);
+
+            uint16 startRewardRate = (order.pricePerPST * order.guaranteeRatio * start_state.rewardRate) >> 11;
+            startRewardRate = getRateByCave(startRewardRate, start_state.totalActiveSize);
+            uint16 endRewardRate = (order.pricePerPST * order.guaranteeRatio * end_state.rewardRate) >> 11;
+            endRewardRate = getRateByCave(endRewardRate, end_state.totalActiveSize);
+            uint16 rewardRaete = (startRewardRate + endRewardRate) / 2;
+            
+            //总奖励金额 = size*周期数*rewardRate
+            uint256 rewardSize = (usage.size * rewardRaete * (usage.endPeriod - startPeriod)<<8) / 336;
+            uint256 systemReward = rewardSize * end_state.systemRatio;
+            rewardSize -= systemReward; 
+            uint totalRatio = ((end_state.supplyRatio + start_state.supplyRatio)*order.guaranteeRatio)>>4 + end_state.demandRatio + start_state.demandRatio;
+            uint256 supplierReward = (rewardSize * (end_state.supplyRatio + start_state.supplyRatio)*order.guaranteeRatio)>>4 / totalRatio;
+            uint256 buyerReward = (rewardSize * (end_state.demandRatio + start_state.demandRatio)) / totalRatio;
+
+            _mintPST(rewardSize,address(this));
+            pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierDeposit + supplierReward);
+            pstToken.transferFrom(address(this), usage.buyer, buyerReward);
+            usage.lastWithDrawPeriod = usage.endPeriod;
+        }
     }
 
     //function fullyScanAndUpdateComputeState(uint16 length) public {
