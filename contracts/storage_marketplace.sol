@@ -171,16 +171,19 @@ contract StorageExchange {
         //TODO
     }
 
-    //function createSupplier(address cfo,string[] memory urlprefixs) public {
-    //    all_suppliers[nextSupplierId] = StorageSupplier(cfo,cfo,new address[](0),urlprefixs,new address[](0));
-    //    nextSupplierId++;
-    //}
+    function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs) public returns (uint64) {
+        all_suppliers[nextSupplierId] = StorageSupplier(msg.sender,cfo,operators,urlprefixs,new address[](0));
+        nextSupplierId++;
+        return nextSupplierId-1;
+    }
 
-    //function udpateSuppliyInfo(uint64 supplierId,string[] memory urlprefixs) public {
-    //    StorageSupplier storage supplier = all_suppliers[supplierId];
-    //    require(_isValidOperator(supplier, msg.sender), "Only operator can update supply info");
-    //    supplier.urlprefixs = urlprefixs;
-    //}
+    function udpateSupplier(uint64 supplierId,address cfo,address[] calldata operators, string[] calldata urlprefixs) public {
+        StorageSupplier storage supplier = all_suppliers[supplierId];
+        require(msg.sender == supplier.ceo, "Only ceo can update supply info");
+        supplier.cfo = cfo;
+        supplier.urlprefixs = urlprefixs;
+        supplier.operators = operators;
+    }
 
     //创建订单，大部分情况是供应单，也可以是需求单
     function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 pricePerPST, uint64 effectivePeriod, uint32 minimumPurchaseSize,
