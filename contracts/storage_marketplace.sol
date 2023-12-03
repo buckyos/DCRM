@@ -14,6 +14,8 @@ contract StorageExchange {
         address[] operators; //不可以进行金融操作
         string[] urlprefixs; //可以修改 比如 https://www.hostname.com/get/
         address[] LPs;//其它股东
+        uint32 longitude;
+        uint32 latitude;
     }
     
     enum UsageStatus {Waiting, Active, ChallengeSuccess, Cancelled,Ended,CancelledFromWait,Lost}
@@ -39,12 +41,10 @@ contract StorageExchange {
         uint16 quality;// 年故障率（不允许填0），这个值越大，越有概率系统返还保证金。
         uint16 pricePerPST;//单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
         uint8 guaranteeRatio;//质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256 (16倍)
-        uint createPeriod; //创建时的周期编号
+        uint64 createPeriod; //创建时的周期编号
         uint64 effectivePeriod;//结束时的周期编号
 
         uint32 minimumPurchaseSize;
-        uint256 depositAmount;//TODO：可以废弃？
-
         uint64 supplierId;
         OrderStatus status;
         uint64 remainingSize;
@@ -68,7 +68,7 @@ contract StorageExchange {
          * 基于算力增发PST的目标是：让PST的总流通量是系统可用存储总量的 约10倍。其参数设计参考宏观经济学的货币发行总量、GDP、平均周转周期逻辑
          * 如果没有其它的因素，所有的 存储交易都是在得到PST后立刻扩产，2年后，系统产出的PST总量是系统总量的约5倍
          * 
-         * 每6周，大概会奖励释放6周总价25%的PST, 根据预期增长率，和自己的价格曲线，最多可以达到 50%总算力，最低保底由当前总算力决定，
+         * 每6周，大概会奖励释放6周总价80%的PST, 根据预期增长率，和自己的价格曲线，最多可以达到 160%总算力，最低保底由当前总算力决定，
          * 保底增长率  16PB  256PB 1EB  4EB  8EB 16EB 32EB     256EB  512EB  1ZB 以上  
          *            25    20    15   10   5   4    3    2   1      0.5     0
          * 实际增长率 d
@@ -82,8 +82,8 @@ contract StorageExchange {
 
         uint8 supplyRatio; //16为1倍，最大值为 256 (16倍)
         uint8 demandRatio; //16为1倍，最大值为 256 (16倍)
-        uint16 systemRatio; //计算算力奖励时，给到系统的比例
-        uint16 rewardRate;//算力奖励的比例.取值为其浮点数 *256
+        uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
+        uint16 rewardRate;//rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)
         uint16 taxRate;//交易结算时，给到系统的交易费用比例
         
         //uint16 avgPricePerPST; 简化实现，强调1PST就是平均价格
@@ -101,7 +101,8 @@ contract StorageExchange {
 
     uint256 public sysPSTAmount = 0;
 
-
+    uint8 public sysPeriodPerWeek = 56; //一周是56个周期
+    uint256 public sysFixPeriodPerWeek = 0;
     uint16 public sysMinPrice = 16; //最小价格，单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
     uint8 public sysMinGuaranteeRatio = 8; //最小质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256
 
@@ -122,9 +123,9 @@ contract StorageExchange {
     constructor(address _pstTokenAddress) {
         pstToken = PSTToken(_pstTokenAddress);
         nextOrderId = 0;
-
+        sysFixPeriodPerWeek = (10**18 / 128) / sysPeriodPerWeek;
         //为了减少除零风险，系统初始化时有1TB的算力，供需双方各10GB的挂单算力，并且已经有了2个已知的系统状态
-
+        
     }
 
     function _getSystemStateIndexFromBlockNumber(uint64 currentPeriodStartBlockNumber,uint64 blockNumber) private view returns (uint64) {
@@ -146,16 +147,6 @@ contract StorageExchange {
         return currentPeriodStartBlockNumber + periodCount * sysBlockPerPeriod;
     }
 
-    function _calcTotalPrice(uint64 periodCount,uint16 pricePerPST,uint64 size) private view returns (uint256) {
-        uint weekCount = periodCount / 56;
-        //pricePerPST的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
-        return (weekCount * pricePerPST * size)>>7;
-    }
-
-    function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private view returns (uint256) {
-        return (totalPrice * guaranteeRatio)>>4;
-    }
-
 
 
     function _isValidOperator(StorageSupplier storage supplier, address operator) private view returns (bool) {
@@ -171,8 +162,40 @@ contract StorageExchange {
         //TODO
     }
 
-    function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs) public returns (uint64) {
-        all_suppliers[nextSupplierId] = StorageSupplier(msg.sender,cfo,operators,urlprefixs,new address[](0));
+    //输入x是用uint256表达的浮点数，其定点逻辑与返回值相同（取值范围是 (0,)）;返回一个用uint16表达的浮点数，返回值的逻辑范围是: (0, 2)
+    function _getFromCave(uint256 x,uint128 totalSize) private view returns (uint16) {
+        //TODO
+        return 1<<15;
+    }
+
+    function _calcReward(uint64 periodCount,uint64 size,uint16 pricePerPST,uint8 guaranteeRatio,
+                         SystemState storage start_state,SystemState storage end_state) private view returns (uint256) {
+        //pricePerPST的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024， >>7
+        //guaranteeRatio, 8（0.5倍），16 (1倍） 最大值为 256 (16倍)       >>4  
+        //rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)  >>15
+        
+        // 组合起来需要 >> 11
+        uint256 end_reward_rate = _getFromCave((uint256(pricePerPST) * uint256(guaranteeRatio) >> 11)* uint256(end_state.rewardRate),end_state.totalActiveSize);
+        uint256 start_reward_rate = _getFromCave((uint256(pricePerPST) * uint256(guaranteeRatio) >> 11)* uint256(start_state.rewardRate),start_state.totalActiveSize);
+        
+        // 组合起来需要 >>26,算平均数/2,总共>>27
+        //periodCount * size * (end_reward_rate + start_reward_rate) / 2
+        return uint256(periodCount) * uint256(size) * sysFixPeriodPerWeek * (end_reward_rate + start_reward_rate) >> 27;
+    }
+
+
+    function _calcTotalPrice(uint64 periodCount,uint16 pricePerPST,uint64 size) private view returns (uint256) {
+        //pricePerPST的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
+        // sysFixPeriodPerWeek = (10**18 / sysPeriodPerWeek)/128, 10**18是为了避免小数点,sysPeriodPerWeek=56
+        return (periodCount * pricePerPST * size) * sysFixPeriodPerWeek;
+    }
+
+    function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private view returns (uint256) {
+        return (totalPrice * guaranteeRatio)>>4;
+    }
+
+    function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs,uint32 longtitude,uint32 latitude) public returns (uint64) {
+        all_suppliers[nextSupplierId] = StorageSupplier(msg.sender,cfo,operators,urlprefixs,new address[](0),longtitude,latitude);
         nextSupplierId++;
         return nextSupplierId-1;
     }
@@ -187,11 +210,11 @@ contract StorageExchange {
 
     //创建订单，大部分情况是供应单，也可以是需求单
     function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 pricePerPST, uint64 effectivePeriod, uint32 minimumPurchaseSize,
-                                uint256 depositAmount, bytes32 rootHash) public {
+                                uint8 guaranteeRatio, bytes32 rootHash) public {
         require(effectivePeriod >= sysMinEffectivePeriod, "Effective time too short");
         require(pricePerPST >= sysMinPrice, "Price too low");
         uint256 totalPrice = _calcTotalPrice(effectivePeriod, pricePerPST,size);
-        uint8 guaranteeRatio = uint8((depositAmount*16) / totalPrice);
+        uint256 depositAmount = _calcDeposit(totalPrice,guaranteeRatio);
         require(depositAmount >= (totalPrice * sysMinGuaranteeRatio)>>4, "Deposit amount too small");
         
         if(supplierId != 0) {
@@ -217,7 +240,6 @@ contract StorageExchange {
         order.createPeriod = currentPeriod;
         order.effectivePeriod = effectivePeriod;
         order.minimumPurchaseSize = minimumPurchaseSize;
-        order.depositAmount = depositAmount;
         order.status = OrderStatus.Waiting;
         order.remainingSize = size;
         order.leaveCount = 0;
@@ -250,7 +272,7 @@ contract StorageExchange {
 
 
     //向一个订单购买存储空间
-    function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash) public {
+    function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
         StorageOrder storage order = orders[orderId];
         StorageUsage storage usage = order.buyers[rootHash];
         require(usage.size == 0, "Already bought");
@@ -262,14 +284,14 @@ contract StorageExchange {
         //只有订单创建开始一小段时间后，才能购买
         require(currentPeriod - order.createPeriod > sysMinActivePeriod, "wait order active");
        
-       
-        uint256 totalPrice = _calcTotalPrice(order.effectivePeriod - currentPeriod, order.pricePerPST, size);
+        uint256 totalPrice = _calcTotalPrice(duration, order.pricePerPST, size);
         pstToken.transferFrom(msg.sender, address(this), totalPrice);
         
         SystemState storage state = all_system_states[currentPeriod];
         usage.buyer = msg.sender;
         usage.craetePeriod = currentPeriod;
-        usage.effectivePeriod = order.effectivePeriod;
+        usage.effectivePeriod = duration;//在active之前这里保存的是购买时长，active后变成结束时间 （能节约gas fee么？）
+        //usage.effectivePeriod = currentPeriod + (order.effectivePeriod);
         usage.status = UsageStatus.Waiting;
 
         order.status = OrderStatus.Active;
@@ -279,7 +301,7 @@ contract StorageExchange {
     }
 
     //向一个订单发送报价意向
-    function makeOffer(uint64 supplierId,uint64 orderId) public {
+    function makeOffer(uint64 supplierId,uint64 orderId,bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand orders can receive offers");
         require(order.status == OrderStatus.Waiting, "Only waiting order can receive offers");
@@ -288,8 +310,9 @@ contract StorageExchange {
         require(order.effectivePeriod - currentPeriod <= sysMinEffectivePeriod, "wait order active");
         StorageSupplier storage supplier = all_suppliers[supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can make offer");
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.pricePerPST, order.size),order.guaranteeRatio);
 
-        pstToken.transferFrom(supplier.cfo, address(this), order.depositAmount);
+        pstToken.transferFrom(supplier.cfo, address(this), depositAmount);
         order.supplierId = supplierId;
         order.status = OrderStatus.Active;
         order.createPeriod = currentPeriod - 2;
@@ -307,14 +330,39 @@ contract StorageExchange {
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can cancelOrder");
         require(order.status == OrderStatus.Waiting, "Only waiting order can be cancelled");
-
-        pstToken.transferFrom(address(this), supplier.cfo, order.depositAmount);
         order.status = OrderStatus.Cancelled;
 
         SystemState storage state = all_system_states[currentPeriod];
         state.totalSupplyOrderSize -= order.size;
- 
-        //emit OrderCancelled(orderId);
+
+        //TODO:挂单奖励
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.pricePerPST, order.size),order.guaranteeRatio);
+        pstToken.transferFrom(address(this), supplier.cfo, depositAmount);
+    }
+
+    //释放限制空间并返还对应的保证金
+    function freeOrderSpace(uint64 orderId,uint64 freeSize) public {
+        StorageOrder storage order = orders[orderId];
+        StorageSupplier storage supplier = all_suppliers[order.supplierId];
+        require((order.supplierId !=0), "Only standard order can be free");
+        require(order.status == OrderStatus.Active, "Only active order can be free");
+        uint64 willFreeSize;
+        if(currentPeriod > order.effectivePeriod) {
+            order.status = OrderStatus.Ended;
+            willFreeSize = order.remainingSize;
+        } else {
+            willFreeSize = freeSize;
+            require(willFreeSize <= order.remainingSize, "free size too large");
+            order.remainingSize -= willFreeSize;
+        }
+        require(_isValidOperator(supplier, msg.sender), "Only operator can freeOrderSpace");
+
+        SystemState storage state = all_system_states[currentPeriod];
+        state.totalSupplyOrderSize -= willFreeSize;
+
+        //TODO：处理挂单奖励？严格的计算比较复杂，简单的计算要防止套路
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - order.createPeriod,order.pricePerPST,willFreeSize),order.guaranteeRatio);
+        pstToken.transferFrom(address(this), all_suppliers[order.supplierId].cfo, depositAmount);
     }
 
     function confirmUsageRoot(uint64 orderId,bytes32 rootHash) public {
@@ -328,14 +376,20 @@ contract StorageExchange {
 
         usage.status = UsageStatus.Active;
         usage.activePeriod = currentPeriod;
+        usage.effectivePeriod = currentPeriod + order.effectivePeriod;
+
         SystemState storage state = all_system_states[currentPeriod];
         state.totalActiveSize += usage.size;
     }
 
-    //TODO：双方主动协商，友好提前结束订单
-    function cancelUsage(uint64 orderId,bytes32 rootHash) public {
+    //TODO：一方提出友好离开，另一方同意后，订单结束。不扣保证金
+    // function cancelUsage(uint64 orderId,bytes32 rootHash) public {
 
-    }
+    // }
+    //end & withdraw: 
+    // function confirmCancel(uint64 orderId,bytes32 rootHash) public {
+
+    // }
 
 
     // 发起存储挑战
@@ -376,7 +430,7 @@ contract StorageExchange {
         usage.challengeHash = 0;
     }
 
-    //超时后，确认挑战成功，并提款
+    //end & withdraw:  超时后，确认挑战成功，并提款 DONE
     function challengeSuccess(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
@@ -387,16 +441,41 @@ contract StorageExchange {
         require(currentPeriod - usage.challengePeriod > sysChallengeTimeout, "Challenge is not expired!");
 
         usage.status = UsageStatus.ChallengeSuccess;
-        usage.endPeriod = usage.challengePeriod  + sysChallengeTimeout;
+        usage.endPeriod = usage.challengePeriod;
 
         SystemState storage state = all_system_states[currentPeriod];
         state.totalActiveSize -= usage.size;
+        //order.remainingSize += usage.size; 扣除保证金
 
+        //以挑战时间为结束时间计算算力奖励
+        //buyer:支付挑战时间以前的费用，获得保证金和诉讼费用（手续费补贴）
+        //supplier:获得支付挑战时间以前的费用。
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
-        _withdrawUsage(supplier,order,usage);
+        uint64 startPeriod = usage.lastWithDrawPeriod == 0?usage.activePeriod:usage.lastWithDrawPeriod;
+        SystemState storage end_state = all_system_states[usage.challengePeriod];
+        SystemState storage start_state = all_system_states[startPeriod];
+        //供应商提取的是1）buyer按比例的费用 2)算力奖励
+        //buyer提取的是：算力奖励
+        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.pricePerPST, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        
+        //supplyRatio:16为1倍，最大值为 256 (16倍)
+        uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
+        uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
+       
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+
+        _mintPST(reward,address(this));
+        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        pstToken.transferFrom(address(this), usage.buyer, buyerReward  + depositAmount);
     }
 
-    //供应商主动说明数据丢失
+    //end & withdraw:  供应商主动说明数据丢失,DONE
     function reportDataLost(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
@@ -409,12 +488,38 @@ contract StorageExchange {
         require(usage.challengeHash == 0, "Challenge Already initiated");
 
         usage.status = UsageStatus.Lost;
-        usage.endPeriod = currentPeriod;
+        //usage.endPeriod = currentPeriod;
 
         SystemState storage state = all_system_states[currentPeriod];
         state.totalActiveSize -= usage.size;
+        order.remainingSize += (usage.size / 10);//返还10%的保证金
+        
+        //以当前时间为结束时间计算算力奖励
+        //buyer:支付当前时间以前的费用，获得90%保证金和诉讼费
+        //supplier:获得当前时间以前的费用。
+        uint64 startPeriod = usage.lastWithDrawPeriod == 0?usage.activePeriod:usage.lastWithDrawPeriod;
+        SystemState storage end_state = all_system_states[currentPeriod];
+        SystemState storage start_state = all_system_states[startPeriod];
+        //供应商提取的是1）buyer按比例的费用 2)算力奖励
+        //buyer提取的是：算力奖励
+        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.pricePerPST, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(currentPeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        
+        //supplyRatio:16为1倍，最大值为 256 (16倍)
+        uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
+        uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
+       
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _withdrawUsage(supplier,order,usage);
+        _mintPST(reward,address(this));
+        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        pstToken.transferFrom(address(this), usage.buyer, buyerReward + (depositAmount*9)/10);
+
     }
 
     //认为挑战设置的challengeHash并不是roothash的Merkle叶子节点
@@ -428,13 +533,12 @@ contract StorageExchange {
         require(usage.declearPeriod == 0, "Already decleared illegal");
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can declear Challenge Illegal");
-        //TODO:诉讼费用如何计算
+   
         pstToken.transferFrom(supplier.cfo, address(this),sysDeclearFee);
         usage.declearPeriod = currentPeriod;
-       
     }
 
-    //展示叶子节点的路径并验证
+    //end & withdraw: 展示叶子节点的路径并验证,DONE
     function showChallengePath(uint64 orderId,bytes32 rootHash,uint64 dataIndex,bytes32[] calldata fullPath) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
@@ -442,7 +546,11 @@ contract StorageExchange {
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash != 0, "No challenge initiated");
         require(usage.declearPeriod != 0, "No decleared illegal");
-        require(currentPeriod - usage.declearPeriod <= sysChallengeTimeout, "Show evidence to decleared Challenge illegal expired");
+        if(currentPeriod - usage.challengePeriod > sysChallengeTimeout) {
+            usage.declearPeriod = 0;
+            usage.challengeHash = 0;
+            return;
+        }
 
         require(verify(fullPath,rootHash,usage.challengeHash,dataIndex),"Show evidence failed");
 
@@ -451,9 +559,35 @@ contract StorageExchange {
 
         SystemState storage state = all_system_states[currentPeriod];
         state.totalActiveSize -= usage.size;
+        //order.remainingSize += usage.size; 数据损坏会导致订单的总大小无法恢复，进而导致supplier无法通过释放空间逻辑得到保证金
         
+        //以挑战时间为结束时间计算算力奖励
+        //buyer:支付挑战时间以前的费用，获得保证金和诉讼费用（手续费补贴）
+        //supplier:获得支付挑战时间以前的费用。
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
-        _withdrawUsage(supplier,order,usage);
+        uint64 startPeriod = usage.lastWithDrawPeriod == 0?usage.activePeriod:usage.lastWithDrawPeriod;
+        SystemState storage end_state = all_system_states[usage.challengePeriod];
+        SystemState storage start_state = all_system_states[startPeriod];
+        //供应商提取的是1）buyer按比例的费用 2)算力奖励
+        //buyer提取的是：算力奖励
+        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.pricePerPST, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        
+        //supplyRatio:16为1倍，最大值为 256 (16倍)
+        uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
+        uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
+       
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+
+        _mintPST(reward,address(this));
+        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        pstToken.transferFrom(address(this), usage.buyer, buyerReward + sysDeclearFee + depositAmount);
+        
     }
 
     //TODO 需要确保该实现与DMC Mainchain的一致
@@ -501,72 +635,74 @@ contract StorageExchange {
         order.status = OrderStatus.Active;
     }
 
-    //订单到期正常结束
-    function endUsage(uint64 orderId, bytes32 rootHash) public {
-        StorageOrder storage order = orders[orderId];
-        StorageUsage storage usage = order.buyers[rootHash];
-        require(usage.status == UsageStatus.Active, "Usage not active");
-        require(currentPeriod >=  usage.effectivePeriod, "Usage not end");
-
-        usage.endPeriod = usage.effectivePeriod;
-        usage.status = UsageStatus.Ended;
-
-        SystemState storage state = all_system_states[currentPeriod];
-        state.totalActiveSize -= usage.size;
-
-        StorageSupplier storage supplier = all_suppliers[order.supplierId];
-        _withdrawUsage(supplier,order,usage);
-    }
-
-    //活动订单中途提现
+    //活动订单中途提现 （必须是active）,DONE
     function withDraw(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         StorageUsage storage usage = order.buyers[rootHash];
         require(usage.status == UsageStatus.Active, "Usage not active");
-        StorageSupplier storage supplier = all_suppliers[order.supplierId];
+        require(usage.effectivePeriod > currentPeriod, "Usage already ended");
+        require(usage.challengeHash == 0, "Challenge Already initiated");
 
-        _withdrawUsage(supplier,order,usage);
+        StorageSupplier storage supplier = all_suppliers[order.supplierId];
+        uint64 startPeriod = usage.lastWithDrawPeriod == 0?usage.activePeriod:usage.lastWithDrawPeriod;
+        SystemState storage end_state = all_system_states[currentPeriod];
+        SystemState storage start_state = all_system_states[startPeriod];
+        //供应商提取的是1）buyer按比例的费用 2)算力奖励
+        //buyer提取的是：算力奖励
+        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.pricePerPST, usage.size);
+        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        
+        //supplyRatio:16为1倍，最大值为 256 (16倍)
+        uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
+        uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
+       
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+
+        _mintPST(reward,address(this));
+        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        pstToken.transferFrom(address(this), usage.buyer, buyerReward);
+
+        usage.lastWithDrawPeriod = currentPeriod;
     }
 
-    function _withdrawUsage(StorageSupplier storage supplier,StorageOrder storage order,StorageUsage storage usage) private {
-        uint64 startPeriod = usage.lastWithDrawPeriod;
-        if(startPeriod == 0) {
-            require(currentPeriod - usage.craetePeriod >= sysFirstWithDrawPeriod, "first withdraw must be after 6 weeks");
-            startPeriod = usage.activePeriod;
-        }
-    
+    //end & withdraw,订单到期正常结束,调用会触发提现,DONE
+    function endUsage(uint64 orderId, bytes32 rootHash) public {
+        StorageOrder storage order = orders[orderId];
+        StorageUsage storage usage = order.buyers[rootHash];
+        require(usage.status == UsageStatus.Active, "Usage not active");
+        require(currentPeriod >  usage.effectivePeriod, "Usage not end");
+        require(usage.challengeHash == 0, "Challenge Already initiated");
+        
+        usage.status = UsageStatus.Ended;
+        order.remainingSize += usage.size;
+        SystemState storage state = all_system_states[currentPeriod];
+        state.totalActiveSize -= usage.size;
+        
+        StorageSupplier storage supplier = all_suppliers[order.supplierId];
+        uint64 startPeriod = usage.lastWithDrawPeriod == 0?usage.activePeriod:usage.lastWithDrawPeriod;
+        SystemState storage end_state = all_system_states[usage.effectivePeriod];
         SystemState storage start_state = all_system_states[startPeriod];
-        if(usage.status == UsageStatus.Ended) {
-            uint64 endPeriod = usage.endPeriod;
-            if(startPeriod == endPeriod) {
-                return;
-            }
+  
+        uint256 supplierIncome =  _calcTotalPrice(usage.effectivePeriod - startPeriod, order.pricePerPST, usage.size);
+        uint256 reward = _calcReward(usage.effectivePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        
+        //supplyRatio:16为1倍，最大值为 256 (16倍)
+        uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
+        uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
+       
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
+        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-            SystemState storage end_state = all_system_states[endPeriod];
-            //供应商提取的是1）buyer按比例的费用 2)算力奖励 3)保证金
-            //buyer提取的是：算力奖励
-            uint256 supplierIncome = _calcTotalPrice(endPeriod - startPeriod, order.pricePerPST, usage.size);
-            uint256 supplierDeposit = _calcDeposit(supplierIncome,order.guaranteeRatio);
-
-            uint16 startRewardRate = (order.pricePerPST * order.guaranteeRatio * start_state.rewardRate) >> 11;
-            startRewardRate = getRateByCave(startRewardRate, start_state.totalActiveSize);
-            uint16 endRewardRate = (order.pricePerPST * order.guaranteeRatio * end_state.rewardRate) >> 11;
-            endRewardRate = getRateByCave(endRewardRate, end_state.totalActiveSize);
-            uint16 rewardRaete = (startRewardRate + endRewardRate) / 2;
-            
-            //总奖励金额 = size*周期数*rewardRate
-            uint256 rewardSize = (usage.size * rewardRaete * (usage.endPeriod - startPeriod)<<8) / 336;
-            uint256 systemReward = rewardSize * end_state.systemRatio;
-            rewardSize -= systemReward; 
-            uint totalRatio = ((end_state.supplyRatio + start_state.supplyRatio)*order.guaranteeRatio)>>4 + end_state.demandRatio + start_state.demandRatio;
-            uint256 supplierReward = (rewardSize * (end_state.supplyRatio + start_state.supplyRatio)*order.guaranteeRatio)>>4 / totalRatio;
-            uint256 buyerReward = (rewardSize * (end_state.demandRatio + start_state.demandRatio)) / totalRatio;
-
-            _mintPST(rewardSize,address(this));
-            pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierDeposit + supplierReward);
-            pstToken.transferFrom(address(this), usage.buyer, buyerReward);
-            usage.lastWithDrawPeriod = usage.endPeriod;
-        }
+        _mintPST(reward,address(this));
+        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        pstToken.transferFrom(address(this), usage.buyer, buyerReward);
     }
 
     //function fullyScanAndUpdateComputeState(uint16 length) public {
@@ -574,10 +710,7 @@ contract StorageExchange {
         // In order to appear a large number of expirations when this interface, this interface is designed. If the end of the order is updated in time, the calculation of the compassion reward will be inaccurate
     //}
     
-    function getRateByCave(uint16 rate,uint128 totalSize) public view returns (uint16) {
-        //TODO
-        return rate;
-    }
+
     // 更新算力奖励
     function updateComputeState(uint256 orderId) public {
         //判断距离上一次计算的时间是否超过一定的时间间隔
@@ -597,7 +730,7 @@ contract StorageExchange {
             state.rewardRate  = uint16((growth<<10) / last_state.totalActiveSize);
             
         } else {
-            state.rewardRate = getRateByCave(0,last_state.totalActiveSize);
+            state.rewardRate = _getFromCave(0,last_state.totalActiveSize);
         }
 
         //计算supplyRatio和demandRatio，systemRatio
@@ -628,19 +761,19 @@ contract StorageExchange {
 
 
     // TODO:兑换DMC和PST (可以用DeFi逻辑实现和任意Token的兑换？)
-    function exchangeDMCforPST(uint256 dmcAmount) public {
+    //function exchangeDMCforPST(uint256 dmcAmount) public {
        // require(dmcToken.balanceOf(msg.sender) >= dmcAmount, "Insufficient DMC balance");
         // 兑换逻辑，涉及市场价格、兑换率等
 
         //emit DMCExchangedForPST(msg.sender, dmcAmount, pstAmount);
-    }
+    //}
 
-    function exchangePSTforDMC(uint256 pstAmount) public {
+    //function exchangePSTforDMC(uint256 pstAmount) public {
         //require(pstToken.balanceOf(msg.sender) >= pstAmount, "Insufficient PST balance");
         // 兑换逻辑，涉及市场价格、兑换率等
 
         //emit PSTExchangedForDMC(msg.sender, pstAmount, dmcAmount);
-    }
+    //}
 
     //LP逻辑
 
