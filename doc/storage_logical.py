@@ -22,3 +22,20 @@ def _withdraw(order,usage,current_time):
     blance[system] = blance[system] + system_income - income
     blance[daemon] = blance[daemon] + daemon_reward
     blance[supply] = blance[supply] + supply_reward + income
+
+
+def calcRewardRate(lastTotalSize,totalSize,lastRate):
+    if(totalSize > lastTotalSize):
+        growth = (totalSize - lastTotalSize)*56*6
+        #相当于24周（半年）的增长率
+        g_rate =  (growth*4 / totalSize)
+        if(g_rate > lastRate):
+            return g_rate
+        return lastRate * (1+g_rate)
+    else:
+        decrise = (lastTotalSize - totalSize)*56*6
+        d_rate = (decrise*4) / totalSize
+        if(d_rate > 1):
+            return getFromCarve(0)
+        
+        return lastRate*(1-d_rate)

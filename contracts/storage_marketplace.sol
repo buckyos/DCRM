@@ -56,7 +56,7 @@ contract StorageExchange {
 
     
     struct SystemState {
-        uint64 blockNumber;//本周期的开始区块高度
+        uint256 blockNumber;//本周期的开始区块高度
         uint128 totalActiveSize;
         uint128 totalSupplyOrderSize;
         uint128 totalDemandOrderSize;
@@ -82,10 +82,9 @@ contract StorageExchange {
 
         uint8 supplyRatio; //16为1倍，最大值为 256 (16倍)
         uint8 demandRatio; //16为1倍，最大值为 256 (16倍)
-        uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
+        //uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
         uint16 rewardRate;//rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)
-        uint16 taxRate;//交易结算时，给到系统的交易费用比例
-        
+        //uint16 taxRate;//交易结算时，给到系统的交易费用比例
         //uint16 avgPricePerPST; 简化实现，强调1PST就是平均价格
     }
 
@@ -105,7 +104,7 @@ contract StorageExchange {
     uint256 public sysFixPeriodPerWeek = 0;
     uint16 public sysMinPrice = 16; //最小价格，单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
     uint8 public sysMinGuaranteeRatio = 8; //最小质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256
-
+    //uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
     uint64 public sysMinEffectivePeriod = 56*24; //最小有效周期为 24周，一周是56个周期，24*56
     uint64 public sysMinActivePeriod = 2;//从wait转到active的最小周期
     uint32 public sysMinPurchaseSize = 1024*1024*1024*2;//2G 
@@ -136,6 +135,10 @@ contract StorageExchange {
         } else {
             return currentPeriod;
         }
+    }
+
+    function _getSystemRatio(uint128 totalActiveSize) private pure returns (uint8) {
+        return 127;
     }
 
     //结算周期，1天8次，每次约3小时，一个Week等于56个peroid
@@ -269,8 +272,6 @@ contract StorageExchange {
         nextOrderId++;
     }
 
-
-
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
         StorageOrder storage order = orders[orderId];
@@ -315,7 +316,7 @@ contract StorageExchange {
         pstToken.transferFrom(supplier.cfo, address(this), depositAmount);
         order.supplierId = supplierId;
         order.status = OrderStatus.Active;
-        order.createPeriod = currentPeriod - 2;
+        order.createPeriod = currentPeriod;//让订单看起来像是刚刚创建的
 
         SystemState storage state = all_system_states[currentPeriod];
         state.totalDemandOrderSize -= order.size;
@@ -323,6 +324,7 @@ contract StorageExchange {
 
     // 取消订单
     // TODO:已经事实上没有usage的订单是否可以取消？这里的计算有点复杂
+    // TODO:处理买单取消应该另开一个函数？
     function cancelOrder(uint64 orderId) public {
         StorageOrder storage order = orders[orderId];
         require((order.supplierId !=0), "Only standard order can be cancelled");
@@ -464,11 +466,12 @@ contract StorageExchange {
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
        
+        uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
         _mintPST(reward,address(this));
         pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
@@ -509,12 +512,13 @@ contract StorageExchange {
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
-       
+        
+        uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
         _mintPST(reward,address(this));
         pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
@@ -578,11 +582,12 @@ contract StorageExchange {
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
        
+        uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
         _mintPST(reward,address(this));
         pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
@@ -655,12 +660,13 @@ contract StorageExchange {
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
-       
+
+        uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
         _mintPST(reward,address(this));
         pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
@@ -693,12 +699,13 @@ contract StorageExchange {
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
-       
+        
+        uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order.guaranteeRatio) / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 supplierReward = ((((reward*start_state.systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
-        uint256 buyerReward = (((reward*start_state.systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
+        uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
         _mintPST(reward,address(this));
         pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
@@ -713,27 +720,26 @@ contract StorageExchange {
 
     // 更新算力奖励
     function updateComputeState(uint256 orderId) public {
-        //判断距离上一次计算的时间是否超过一定的时间间隔
-
-        //读取全局变量：当前挂单的两种算力，处于成交阶段的算力
-        //读取上一次更新计算时的3个值
-        //根据当前的3个值，计算变化趋势，更新经济学参数
-        SystemState storage last_state = all_system_states[currentPeriod-1]; //合约初始化的时候要初始化一个初始的计算状态，为各个经济学参数赋予初值
         SystemState storage state = all_system_states[currentPeriod];
-        
-        //计算rewardRate
-        if(state.totalActiveSize > last_state.totalActiveSize) {
-            //1）计算 6周预期的增长数值growth 
-            uint128 growth = (state.totalActiveSize - last_state.totalActiveSize)*56*6;
-            //2) 计算 rate = (growth / last_state.totalActiveSize) / 25% =  (growth*4 / last_state.totalActiveSize) ; 
-            // 用 0-256的整数代替浮点数，因此  rate = (growth*4 / last_state.totalActiveSize) * 256
-            state.rewardRate  = uint16((growth<<10) / last_state.totalActiveSize);
-            
+        //判断是否可以结束当前period
+        if(block.number - state.blockNumber <= sysBlockPerPeriod) {
+            return;
+        }
+        SystemState storage lastState = all_system_states[currentPeriod-1]; //合约初始化的时候要初始化一个初始的计算状态，为各个经济学参数赋予初值
+
+        if(state.totalActiveSize > lastState.totalActiveSize) {
+            //计算 6周预期的增长数值growth 
+            uint128 growth = (state.totalActiveSize - lastState.totalActiveSize)*56*6;
+            //计算 rate = (growth / last_state.totalActiveSize) / 25% =  (growth*4 / last_state.totalActiveSize) ; 
+            // 用 0-2^16 的整数代替浮点数，因此  rate = (growth*4 / last_state.totalActiveSize) * (2^15)
+            state.rewardRate  = uint16((growth<<17) / lastState.totalActiveSize);
         } else {
-            state.rewardRate = _getFromCave(0,last_state.totalActiveSize);
+            //存储空间下降，取最低值（TODO：计算下降比率，然后用lastState.rewardRate*下降比率）
+            //  上述算法的主要问题是，有可能下降 还要比 增长 慢的效果更好。
+            state.rewardRate = 1638;//(0.05 * 2^15)
         }
 
-        //计算supplyRatio和demandRatio，systemRatio
+        //计算supplyRatio和demandRatio
         if(state.totalSupplyOrderSize > state.totalDemandOrderSize) {
             state.demandRatio = 1<<4;
             if(state.totalSupplyOrderSize*256<state.totalActiveSize) {
@@ -750,11 +756,9 @@ contract StorageExchange {
             }
         }
 
-        //挂单奖励在哪？
-
-        //更新taxRate（只和总大小有关？）
-
+        //挂单奖励是根据rewardRate,suplyRation,demandRation计算，这里不用更新
         SystemState memory newState = state;
+        newState.blockNumber = block.number;//TODO:还是应该用  lastState.blockNumber + sysBlockPerPeriod?
         currentPeriod ++;
         all_system_states[currentPeriod] = newState;
     }
