@@ -117,6 +117,11 @@ contract StorageExchange {
     uint8 public sysMaxLeaveCount = 2; //每年（48周）能请假两次？
     uint16 public sysFirstWithDrawPeriod = 56*6;//第一次提现的周期
     uint16 public sysBlockPerPeriod = 4*60*3;//以太坊平均15秒1个块，一个周期是3小时
+
+    event SupplierCreated(uint64 supplierId);
+    event SupplierChanged(uint64 supplierId);
+    event StorageOrderCreated(uint64 orderId);
+    event StoragePurchased(uint64 orderId, address buyer, uint64 size);
     
 
     constructor(address _pstTokenAddress) {
@@ -197,18 +202,24 @@ contract StorageExchange {
         return (totalPrice * guaranteeRatio)>>4;
     }
 
-    function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs,uint32 longtitude,uint32 latitude) public returns (uint64) {
+    function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs,uint32 longtitude,uint32 latitude) public {
         all_suppliers[nextSupplierId] = StorageSupplier(msg.sender,cfo,operators,urlprefixs,new address[](0),longtitude,latitude);
         nextSupplierId++;
-        return nextSupplierId-1;
+        emit SupplierCreated(nextSupplierId-1);
     }
 
-    function udpateSupplier(uint64 supplierId,address cfo,address[] calldata operators, string[] calldata urlprefixs) public {
+    function updateSupplier(uint64 supplierId,address cfo,address[] calldata operators, string[] calldata urlprefixs) public {
         StorageSupplier storage supplier = all_suppliers[supplierId];
         require(msg.sender == supplier.ceo, "Only ceo can update supply info");
         supplier.cfo = cfo;
         supplier.urlprefixs = urlprefixs;
         supplier.operators = operators;
+
+        emit SupplierChanged(supplierId);
+    }
+
+    function supplier(uint64 supplierId) public view returns (StorageSupplier memory) {
+        return all_suppliers[supplierId];
     }
 
     //创建订单，大部分情况是供应单，也可以是需求单
@@ -269,8 +280,16 @@ contract StorageExchange {
             state.totalDemandOrderSize += size;
         }
 
+        emit StorageOrderCreated(nextOrderId);
+
         nextOrderId++;
     }
+
+    // TODO: 把map从StorageOrder里移出，嵌套的map无法返回给合约外部
+    /*
+    function order(uint64 orderId) public view returns(StorageOrder memory) {
+        return orders[orderId];
+    }*/
 
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
@@ -298,7 +317,7 @@ contract StorageExchange {
         order.status = OrderStatus.Active;
         order.remainingSize -= size;
         state.totalSupplyOrderSize -= size;
-        //emit StoragePurchased(orderId, msg.sender, size);
+        emit StoragePurchased(orderId, msg.sender, size);
     }
 
     //向一个订单发送报价意向
