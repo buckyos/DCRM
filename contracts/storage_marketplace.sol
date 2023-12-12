@@ -2,16 +2,16 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "./pst.sol";
+import "./gwt.sol";
 
 
 contract StorageExchange {
-    PSTToken public pstToken;
+    GWTToken public gwtToken;// Gb per Week Token
 
     struct StorageSupplier {
-        address ceo;//可以修改地址
-        address cfo;//可以提现，挂单
-        address[] operators; //不可以进行金融操作
+        address ceo;//可以修改其它职位，拥有最高权限。其私钥很少使用。
+        address cfo;//财务操作
+        address[] operators; //其它操作（比如矿机的自动化操作）
         string[] urlprefixs; //可以修改 比如 https://www.hostname.com/get/
         address[] LPs;//其它股东
         uint32 longitude;
@@ -33,13 +33,14 @@ contract StorageExchange {
         uint64 declearPeriod;
         uint64 lastWithDrawPeriod;
 
+        uint64 orderId;
     }
 
     enum OrderStatus {Waiting,  Active, OnLeave, Cancelled , Ended}
     struct StorageOrder {
         uint64 size;
         uint16 quality;// 年故障率（不允许填0），这个值越大，越有概率系统返还保证金。
-        uint16 pricePerPST;//单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
+        uint16 price;//单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍),比如256表示2个GWT/week
         uint8 guaranteeRatio;//质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256 (16倍)
         uint64 createPeriod; //创建时的周期编号
         uint64 effectivePeriod;//结束时的周期编号
@@ -51,7 +52,9 @@ contract StorageExchange {
         uint64 leavePeriod;//如果当前处于请假状态，本次请假的区块高度
         uint8 leaveCount;//已经请假的总次数
         
-        mapping(bytes32 => StorageUsage) buyers; 
+        
+        
+        //mapping(bytes32 => StorageUsage) buyers; 
     }
 
     
@@ -61,31 +64,12 @@ contract StorageExchange {
         uint128 totalSupplyOrderSize;
         uint128 totalDemandOrderSize;
 
-        /**
-         * @notice 
-         * 
-         * 基本思路： 调整Ratio平衡供求关系
-         * 基于算力增发PST的目标是：让PST的总流通量是系统可用存储总量的 约10倍。其参数设计参考宏观经济学的货币发行总量、GDP、平均周转周期逻辑
-         * 如果没有其它的因素，所有的 存储交易都是在得到PST后立刻扩产，2年后，系统产出的PST总量是系统总量的约5倍
-         * 
-         * 每6周，大概会奖励释放6周总价80%的PST, 根据预期增长率，和自己的价格曲线，最多可以达到 160%总算力，最低保底由当前总算力决定，
-         * 保底增长率  16PB  256PB 1EB  4EB  8EB 16EB 32EB     256EB  512EB  1ZB 以上  
-         *            25    20    15   10   5   4    3    2   1      0.5     0
-         * 实际增长率 d
-         * 根据当前总算力计算出的增长率 r = 25% 
-         * 
-         * 刚刚开始的周期称作本周期
-         * 
-         * 本周期的总有效算力 如果 比上个周期的总有效算力提升，则系统应增发更多的PST，如果有效算力下降，应该增发更少的PST
-         * 
-         */
-
         uint8 supplyRatio; //16为1倍，最大值为 256 (16倍)
         uint8 demandRatio; //16为1倍，最大值为 256 (16倍)
         //uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
         uint16 rewardRate;//rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)
         //uint16 taxRate;//交易结算时，给到系统的交易费用比例
-        //uint16 avgPricePerPST; 简化实现，强调1PST就是平均价格
+
     }
 
 
@@ -98,8 +82,9 @@ contract StorageExchange {
     mapping(uint64 => SystemState) public all_system_states;
     uint64 public currentPeriod = 0;
 
-    uint256 public sysPSTAmount = 0;
+    mapping(bytes32 => StorageUsage) public all_usage;//用于验证rootHash是否已经使用过
 
+    uint256 public sysGWTAmount = 0;
     uint8 public sysPeriodPerWeek = 56; //一周是56个周期
     uint256 public sysFixPeriodPerWeek = 0;
     uint16 public sysMinPrice = 16; //最小价格，单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
@@ -124,8 +109,8 @@ contract StorageExchange {
     event StoragePurchased(uint64 orderId, address buyer, uint64 size);
     
 
-    constructor(address _pstTokenAddress) {
-        pstToken = PSTToken(_pstTokenAddress);
+    constructor(address _gwtTokenAddress) {
+        gwtToken = GWTToken(_gwtTokenAddress);
         nextOrderId = 0;
         sysFixPeriodPerWeek = (10**18 / 128) / sysPeriodPerWeek;
         //为了减少除零风险，系统初始化时有1TB的算力，供需双方各10GB的挂单算力，并且已经有了2个已知的系统状态
@@ -166,7 +151,7 @@ contract StorageExchange {
         return false;
     }
 
-    function _mintPST(uint256 amount,address target) private {
+    function _mintGWT(uint256 amount,address target) private {
         //TODO
     }
 
@@ -176,15 +161,15 @@ contract StorageExchange {
         return 1<<15;
     }
 
-    function _calcReward(uint64 periodCount,uint64 size,uint16 pricePerPST,uint8 guaranteeRatio,
+    function _calcReward(uint64 periodCount,uint64 size,uint16 price,uint8 guaranteeRatio,
                          SystemState storage start_state,SystemState storage end_state) private view returns (uint256) {
-        //pricePerPST的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024， >>7
+        //price的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024， >>7
         //guaranteeRatio, 8（0.5倍），16 (1倍） 最大值为 256 (16倍)       >>4  
         //rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)  >>15
         
         // 组合起来需要 >> 11
-        uint256 end_reward_rate = _getFromCave((uint256(pricePerPST) * uint256(guaranteeRatio) >> 11)* uint256(end_state.rewardRate),end_state.totalActiveSize);
-        uint256 start_reward_rate = _getFromCave((uint256(pricePerPST) * uint256(guaranteeRatio) >> 11)* uint256(start_state.rewardRate),start_state.totalActiveSize);
+        uint256 end_reward_rate = _getFromCave((uint256(price) * uint256(guaranteeRatio) >> 11)* uint256(end_state.rewardRate),end_state.totalActiveSize);
+        uint256 start_reward_rate = _getFromCave((uint256(price) * uint256(guaranteeRatio) >> 11)* uint256(start_state.rewardRate),start_state.totalActiveSize);
         
         // 组合起来需要 >>26,算平均数/2,总共>>27
         //periodCount * size * (end_reward_rate + start_reward_rate) / 2
@@ -192,10 +177,10 @@ contract StorageExchange {
     }
 
 
-    function _calcTotalPrice(uint64 periodCount,uint16 pricePerPST,uint64 size) private view returns (uint256) {
-        //pricePerPST的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
+    function _calcTotalPrice(uint64 periodCount,uint16 price,uint64 size) private view returns (uint256) {
+        //price的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
         // sysFixPeriodPerWeek = (10**18 / sysPeriodPerWeek)/128, 10**18是为了避免小数点,sysPeriodPerWeek=56
-        return (periodCount * pricePerPST * size) * sysFixPeriodPerWeek;
+        return (periodCount * price * size) * sysFixPeriodPerWeek;
     }
 
     function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private view returns (uint256) {
@@ -223,11 +208,11 @@ contract StorageExchange {
     }
 
     //创建订单，大部分情况是供应单，也可以是需求单
-    function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 pricePerPST, uint64 effectivePeriod, uint32 minimumPurchaseSize,
+    function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 price, uint64 effectivePeriod, uint32 minimumPurchaseSize,
                                 uint8 guaranteeRatio, bytes32 rootHash) public {
         require(effectivePeriod >= sysMinEffectivePeriod, "Effective time too short");
-        require(pricePerPST >= sysMinPrice, "Price too low");
-        uint256 totalPrice = _calcTotalPrice(effectivePeriod, pricePerPST,size);
+        require(price >= sysMinPrice, "Price too low");
+        uint256 totalPrice = _calcTotalPrice(effectivePeriod, price,size);
         uint256 depositAmount = _calcDeposit(totalPrice,guaranteeRatio);
         require(depositAmount >= (totalPrice * sysMinGuaranteeRatio)>>4, "Deposit amount too small");
         
@@ -236,12 +221,12 @@ contract StorageExchange {
             require(_isValidOperator(supplier, msg.sender), "Only operator can create order");
             require(minimumPurchaseSize >= sysMinPurchaseSize, "Minimum purchase size too small");
             
-            pstToken.transferFrom(supplier.cfo, address(this), depositAmount);
+            gwtToken.transferFrom(supplier.cfo, address(this), depositAmount);
         } else {
             require(size >= sysMinDemandSize);
             require(minimumPurchaseSize == size);
             //需求方依旧可以通过depositAmount要求质押率
-            pstToken.transferFrom(msg.sender, address(this), totalPrice);
+            gwtToken.transferFrom(msg.sender, address(this), totalPrice);
         }
 
         SystemState storage state = all_system_states[currentPeriod];
@@ -249,7 +234,7 @@ contract StorageExchange {
         StorageOrder storage order = orders[nextOrderId];
         order.size = size;
         order.quality = quality;
-        order.pricePerPST = pricePerPST;
+        order.price = price;
         order.guaranteeRatio = guaranteeRatio;
         order.createPeriod = currentPeriod;
         order.effectivePeriod = effectivePeriod;
@@ -265,7 +250,7 @@ contract StorageExchange {
         }else{
             order.supplierId = 0;
 
-            order.buyers[rootHash] = StorageUsage(msg.sender,
+            all_usage[rootHash] = StorageUsage(msg.sender,
                 size,
                 UsageStatus.Waiting,
                 currentPeriod,
@@ -275,7 +260,8 @@ contract StorageExchange {
                 0,
                 0,
                 0,
-                0);
+                0,
+                nextOrderId);
 
             state.totalDemandOrderSize += size;
         }
@@ -294,8 +280,8 @@ contract StorageExchange {
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
         StorageOrder storage order = orders[orderId];
-        StorageUsage storage usage = order.buyers[rootHash];
-        require(usage.size == 0, "Already bought");
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.size == 0, "Usage Already exists");
         require(order.status == OrderStatus.Waiting || order.status == OrderStatus.Active, "Only waiting or active order can be bought");
         require(order.remainingSize >= size, "Not enough storage available");
         require(size >= order.minimumPurchaseSize, "size too small");
@@ -304,8 +290,8 @@ contract StorageExchange {
         //只有订单创建开始一小段时间后，才能购买
         require(currentPeriod - order.createPeriod > sysMinActivePeriod, "wait order active");
        
-        uint256 totalPrice = _calcTotalPrice(duration, order.pricePerPST, size);
-        pstToken.transferFrom(msg.sender, address(this), totalPrice);
+        uint256 totalPrice = _calcTotalPrice(duration, order.price, size);
+        gwtToken.transferFrom(msg.sender, address(this), totalPrice);
         
         SystemState storage state = all_system_states[currentPeriod];
         usage.buyer = msg.sender;
@@ -330,9 +316,9 @@ contract StorageExchange {
         require(order.effectivePeriod - currentPeriod <= sysMinEffectivePeriod, "wait order active");
         StorageSupplier storage supplier = all_suppliers[supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can make offer");
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.pricePerPST, order.size),order.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.price, order.size),order.guaranteeRatio);
 
-        pstToken.transferFrom(supplier.cfo, address(this), depositAmount);
+        gwtToken.transferFrom(supplier.cfo, address(this), depositAmount);
         order.supplierId = supplierId;
         order.status = OrderStatus.Active;
         order.createPeriod = currentPeriod;//让订单看起来像是刚刚创建的
@@ -357,8 +343,8 @@ contract StorageExchange {
         state.totalSupplyOrderSize -= order.size;
 
         //TODO:挂单奖励
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.pricePerPST, order.size),order.guaranteeRatio);
-        pstToken.transferFrom(address(this), supplier.cfo, depositAmount);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - currentPeriod, order.price, order.size),order.guaranteeRatio);
+        gwtToken.transferFrom(address(this), supplier.cfo, depositAmount);
     }
 
     //释放限制空间并返还对应的保证金
@@ -382,15 +368,16 @@ contract StorageExchange {
         state.totalSupplyOrderSize -= willFreeSize;
 
         //TODO：处理挂单奖励？严格的计算比较复杂，简单的计算要防止套路
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - order.createPeriod,order.pricePerPST,willFreeSize),order.guaranteeRatio);
-        pstToken.transferFrom(address(this), all_suppliers[order.supplierId].cfo, depositAmount);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order.effectivePeriod - order.createPeriod,order.price,willFreeSize),order.guaranteeRatio);
+        gwtToken.transferFrom(address(this), all_suppliers[order.supplierId].cfo, depositAmount);
     }
 
     function confirmUsageRoot(uint64 orderId,bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
 
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.buyer != address(0), "No such rootHash");
         require(usage.status == UsageStatus.Waiting, "Already confirmed");
         require(_isValidOperator(supplier,msg.sender), "Only operator can confirm usage");
@@ -427,7 +414,8 @@ contract StorageExchange {
             require(order.status == OrderStatus.Active, "Order not active");
         }
         
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.declearPeriod == 0, "Already decleared challenge illegal");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(currentPeriod - usage.challengePeriod > sysMinChallengeDuration, "Challenge too frequent");
@@ -441,7 +429,8 @@ contract StorageExchange {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
 
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash != 0, "No challenge initiated");
         require(currentPeriod - usage.challengePeriod <= sysChallengeTimeout, "Challenge expired");
@@ -456,7 +445,8 @@ contract StorageExchange {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
 
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash != 0, "No challenge initiated");
         require(currentPeriod - usage.challengePeriod > sysChallengeTimeout, "Challenge is not expired!");
@@ -477,9 +467,9 @@ contract StorageExchange {
         SystemState storage start_state = all_system_states[startPeriod];
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
-        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.pricePerPST, usage.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
-        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.price, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.price,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.price,order.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
@@ -492,9 +482,9 @@ contract StorageExchange {
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _mintPST(reward,address(this));
-        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
-        pstToken.transferFrom(address(this), usage.buyer, buyerReward  + depositAmount);
+        _mintGWT(reward,address(this));
+        gwtToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        gwtToken.transferFrom(address(this), usage.buyer, buyerReward  + depositAmount);
     }
 
     //end & withdraw:  供应商主动说明数据丢失,DONE
@@ -505,7 +495,8 @@ contract StorageExchange {
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can report data lost");
 
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash == 0, "Challenge Already initiated");
 
@@ -524,9 +515,9 @@ contract StorageExchange {
         SystemState storage start_state = all_system_states[startPeriod];
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
-        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.pricePerPST, usage.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(currentPeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
-        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.price, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(currentPeriod - usage.activePeriod,order.price,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.price,order.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
@@ -539,9 +530,9 @@ contract StorageExchange {
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _mintPST(reward,address(this));
-        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
-        pstToken.transferFrom(address(this), usage.buyer, buyerReward + (depositAmount*9)/10);
+        _mintGWT(reward,address(this));
+        gwtToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        gwtToken.transferFrom(address(this), usage.buyer, buyerReward + (depositAmount*9)/10);
 
     }
 
@@ -549,7 +540,8 @@ contract StorageExchange {
     function declearChallengeIllegal(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash != 0, "No challenge initiated");
         require(currentPeriod - usage.challengePeriod <= sysChallengeTimeout, "Challenge expired");
@@ -557,7 +549,7 @@ contract StorageExchange {
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         require(_isValidOperator(supplier,msg.sender), "Only operator can declear Challenge Illegal");
    
-        pstToken.transferFrom(supplier.cfo, address(this),sysDeclearFee);
+        gwtToken.transferFrom(supplier.cfo, address(this),sysDeclearFee);
         usage.declearPeriod = currentPeriod;
     }
 
@@ -565,7 +557,8 @@ contract StorageExchange {
     function showChallengePath(uint64 orderId,bytes32 rootHash,uint64 dataIndex,bytes32[] calldata fullPath) public {
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.challengeHash != 0, "No challenge initiated");
         require(usage.declearPeriod != 0, "No decleared illegal");
@@ -593,9 +586,9 @@ contract StorageExchange {
         SystemState storage start_state = all_system_states[startPeriod];
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
-        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.pricePerPST, usage.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.pricePerPST,usage.size),order.guaranteeRatio);
-        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        uint256 supplierIncome =  _calcTotalPrice(usage.challengePeriod - startPeriod, order.price, usage.size);
+        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage.effectivePeriod - usage.activePeriod,order.price,usage.size),order.guaranteeRatio);
+        uint256 reward = _calcReward(usage.challengePeriod - startPeriod, usage.size,order.price,order.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
@@ -608,9 +601,9 @@ contract StorageExchange {
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _mintPST(reward,address(this));
-        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
-        pstToken.transferFrom(address(this), usage.buyer, buyerReward + sysDeclearFee + depositAmount);
+        _mintGWT(reward,address(this));
+        gwtToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        gwtToken.transferFrom(address(this), usage.buyer, buyerReward + sysDeclearFee + depositAmount);
         
     }
 
@@ -662,7 +655,8 @@ contract StorageExchange {
     //活动订单中途提现 （必须是active）,DONE
     function withDraw(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(usage.effectivePeriod > currentPeriod, "Usage already ended");
         require(usage.challengeHash == 0, "Challenge Already initiated");
@@ -673,8 +667,8 @@ contract StorageExchange {
         SystemState storage start_state = all_system_states[startPeriod];
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
-        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.pricePerPST, usage.size);
-        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order.price, usage.size);
+        uint256 reward = _calcReward(currentPeriod - startPeriod, usage.size,order.price,order.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
@@ -687,9 +681,9 @@ contract StorageExchange {
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _mintPST(reward,address(this));
-        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
-        pstToken.transferFrom(address(this), usage.buyer, buyerReward);
+        _mintGWT(reward,address(this));
+        gwtToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        gwtToken.transferFrom(address(this), usage.buyer, buyerReward);
 
         usage.lastWithDrawPeriod = currentPeriod;
     }
@@ -697,7 +691,8 @@ contract StorageExchange {
     //end & withdraw,订单到期正常结束,调用会触发提现,DONE
     function endUsage(uint64 orderId, bytes32 rootHash) public {
         StorageOrder storage order = orders[orderId];
-        StorageUsage storage usage = order.buyers[rootHash];
+        StorageUsage storage usage = all_usage[rootHash];
+        require(usage.orderId == orderId, "orderid not match");
         require(usage.status == UsageStatus.Active, "Usage not active");
         require(currentPeriod >  usage.effectivePeriod, "Usage not end");
         require(usage.challengeHash == 0, "Challenge Already initiated");
@@ -712,8 +707,8 @@ contract StorageExchange {
         SystemState storage end_state = all_system_states[usage.effectivePeriod];
         SystemState storage start_state = all_system_states[startPeriod];
   
-        uint256 supplierIncome =  _calcTotalPrice(usage.effectivePeriod - startPeriod, order.pricePerPST, usage.size);
-        uint256 reward = _calcReward(usage.effectivePeriod - startPeriod, usage.size,order.pricePerPST,order.guaranteeRatio,start_state,end_state);
+        uint256 supplierIncome =  _calcTotalPrice(usage.effectivePeriod - startPeriod, order.price, usage.size);
+        uint256 reward = _calcReward(usage.effectivePeriod - startPeriod, usage.size,order.price,order.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
@@ -726,15 +721,10 @@ contract StorageExchange {
         //daemon_rate / (daemon_rate + supply_rate*order.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order.guaranteeRatio)>>4);
 
-        _mintPST(reward,address(this));
-        pstToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
-        pstToken.transferFrom(address(this), usage.buyer, buyerReward);
+        _mintGWT(reward,address(this));
+        gwtToken.transferFrom(address(this), supplier.cfo, supplierIncome + supplierReward);
+        gwtToken.transferFrom(address(this), usage.buyer, buyerReward);
     }
-
-    //function fullyScanAndUpdateComputeState(uint16 length) public {
-        // From the perspective of economics games, the owner of the order has the motivation to end the order as soon as possible and extract PST, so we assume that the end time of the order is updated in a timely manner
-        // In order to appear a large number of expirations when this interface, this interface is designed. If the end of the order is updated in time, the calculation of the compassion reward will be inaccurate
-    //}
     
 
     // 更新算力奖励
@@ -783,24 +773,24 @@ contract StorageExchange {
     }
 
 
-    // TODO:兑换DMC和PST (可以用DeFi逻辑实现和任意Token的兑换？)
-    //function exchangeDMCforPST(uint256 dmcAmount) public {
+    // TODO:兑换DMC和GWT (可以用DeFi逻辑实现和任意Token的兑换？)
+    //function exchangeDMCforGWT(uint256 dmcAmount) public {
        // require(dmcToken.balanceOf(msg.sender) >= dmcAmount, "Insufficient DMC balance");
         // 兑换逻辑，涉及市场价格、兑换率等
 
-        //emit DMCExchangedForPST(msg.sender, dmcAmount, pstAmount);
+        //emit DMCExchangedForGWT(msg.sender, dmcAmount, gwtAmount);
     //}
 
-    //function exchangePSTforDMC(uint256 pstAmount) public {
-        //require(pstToken.balanceOf(msg.sender) >= pstAmount, "Insufficient PST balance");
+    //function exchangeGWTforDMC(uint256 gwtAmount) public {
+        //require(gwtToken.balanceOf(msg.sender) >= gwtAmount, "Insufficient GWT balance");
         // 兑换逻辑，涉及市场价格、兑换率等
 
-        //emit PSTExchangedForDMC(msg.sender, pstAmount, dmcAmount);
+        //emit GWTExchangedForDMC(msg.sender, gwtAmount, dmcAmount);
     //}
 
     //LP逻辑
 
-    //系统LP，绑定一种DAOToken，用于分红，分红的收入来源是系统的tax,包括PST和内置交易所的收入
+    //系统LP，绑定一种DAOToken，用于分红，分红的收入来源是系统的tax,包括GWT和内置交易所的收入
     //基本思路： 质押DAOToken，参与下一个分红周期的分红（8周分红一次）
     //分红逻辑：每个周期，系统会计算所有LP的总质押量，然后按照质押量比例分配分红，LP可以随时提取自己归属的分红，但提取DAO Token后，会至少miss一个周期的分红
 
@@ -812,23 +802,5 @@ contract StorageExchange {
     //function resumeContract() public onlyOwner {
     //    // 实现合约恢复逻辑
     //}
-
-    //event OrderCancelled(uint256 indexed orderId);
-    //event StorageOrderCreated(uint256 indexed orderId);
-    //event OrderFulfilled(uint256 indexed orderId, uint256 purchaseSize);
-    //event MiningRewardsUpdated(uint256 indexed orderId, uint256 rewardAmount);
-    //event MiningRewardCalculated(uint256 indexed orderId, uint256 reward);
-    //event StorageChallengeInitiated(uint256 indexed orderId, bytes32 challengeHash);
-    //event StorageChallengeResponded(uint256 indexed orderId, bytes32 responseHash);
-    //event OrderLeaveApplied(uint256 indexed orderId);
-    //event OrderResumedFromLeave(uint256 indexed orderId);
-    //event DMCExchangedForPST(address indexed user, uint256 dmcAmount, uint256 pstAmount);
-    //event PSTExchangedForDMC(address indexed user, uint256 pstAmount, uint256 dmcAmount);
-    //event CollateralDeposited(uint256 indexed orderId, uint256 amount);
-    //event CollateralRefunded(uint256 indexed orderId, uint256 amount);
-    //event OrderStatusUpdated(uint256 indexed orderId, OrderStatus newStatus);
-    //event OrderCreated(uint256 indexed orderId, address provider, uint256 size);
-    //event OrderFulfilled(uint256 indexed orderId, address buyer, uint256 purchaseSize);
-    //event OrderCancelled(uint256 indexed orderId, address provider);
 
 }
