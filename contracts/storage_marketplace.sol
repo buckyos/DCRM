@@ -51,10 +51,7 @@ contract StorageExchange {
         uint64 remainingSize;
         uint64 leavePeriod;//如果当前处于请假状态，本次请假的区块高度
         uint8 leaveCount;//已经请假的总次数
-        
-        
-        
-        //mapping(bytes32 => StorageUsage) buyers; 
+        //mapping(bytes32 => StorageUsage) buyers;
     }
 
     
@@ -112,7 +109,10 @@ contract StorageExchange {
     constructor(address _gwtTokenAddress) {
         gwtToken = GWTToken(_gwtTokenAddress);
         nextOrderId = 0;
-        sysFixPeriodPerWeek = (10**18 / 128) / sysPeriodPerWeek;
+        //sysFixPeriodPerWeek = (10**18 / 128) / sysPeriodPerWeek;
+        // 之前这里除以128是为了处理price的128倍数，移到正确的_calcTotalPrice函数中处理
+        // 10**18 / 56本身就会造成精度损失，这里试试不再除以这个值
+        sysFixPeriodPerWeek = sysPeriodPerWeek;
         //为了减少除零风险，系统初始化时有1TB的算力，供需双方各10GB的挂单算力，并且已经有了2个已知的系统状态
         
     }
@@ -180,7 +180,8 @@ contract StorageExchange {
     function _calcTotalPrice(uint64 periodCount,uint16 price,uint64 size) private view returns (uint256) {
         //price的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
         // sysFixPeriodPerWeek = (10**18 / sysPeriodPerWeek)/128, 10**18是为了避免小数点,sysPeriodPerWeek=56
-        return (periodCount * price * size) * sysFixPeriodPerWeek;
+        // periodCount * (price >> 7) * size * sysFixPeriodPerWeek得到对应的GWT Token数量，再乘以10**gwtToken.decimals()得到对应的最小单位数量
+        return (periodCount * price * size * sysFixPeriodPerWeek * 10**gwtToken.decimals()) >> 7;
     }
 
     function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private view returns (uint256) {
@@ -249,7 +250,6 @@ contract StorageExchange {
             state.totalSupplyOrderSize += size; 
         }else{
             order.supplierId = 0;
-
             all_usage[rootHash] = StorageUsage(msg.sender,
                 size,
                 UsageStatus.Waiting,
@@ -271,11 +271,10 @@ contract StorageExchange {
         nextOrderId++;
     }
 
-    // TODO: 把map从StorageOrder里移出，嵌套的map无法返回给合约外部
-    /*
+    
     function order(uint64 orderId) public view returns(StorageOrder memory) {
         return orders[orderId];
-    }*/
+    }
 
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
@@ -304,6 +303,10 @@ contract StorageExchange {
         order.remainingSize -= size;
         state.totalSupplyOrderSize -= size;
         emit StoragePurchased(orderId, msg.sender, size);
+    }
+
+    function usage(bytes32 rootHash) public view returns(StorageUsage memory) {
+        return all_usage[rootHash];
     }
 
     //向一个订单发送报价意向
@@ -413,7 +416,7 @@ contract StorageExchange {
         } else {
             require(order.status == OrderStatus.Active, "Order not active");
         }
-        
+
         StorageUsage storage usage = all_usage[rootHash];
         require(usage.orderId == orderId, "orderid not match");
         require(usage.declearPeriod == 0, "Already decleared challenge illegal");
@@ -768,7 +771,7 @@ contract StorageExchange {
         //挂单奖励是根据rewardRate,suplyRation,demandRation计算，这里不用更新
         SystemState memory newState = state;
         newState.blockNumber = block.number;//TODO:还是应该用  lastState.blockNumber + sysBlockPerPeriod?
-        currentPeriod ++;
+        currentPeriod++;
         all_system_states[currentPeriod] = newState;
     }
 

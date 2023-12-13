@@ -1,14 +1,22 @@
-import { ethers } from "hardhat";
+import { ethers, network } from "hardhat";
+import * as fs from "node:fs";
 
 async function main() {
-    const pstContract = await (await ethers.deployContract("PSTToken", [ethers.parseEther("1000000")])).waitForDeployment();
+    const pstContract = await (await ethers.deployContract("GWTToken", [ethers.parseEther("1000000")])).waitForDeployment();
 
     let pstAddress = await pstContract.getAddress();
-    console.log("PST deployed to:", pstAddress);
+    console.log("GWT deployed to:", pstAddress);
 
     const exchangeContract = await (await ethers.deployContract("StorageExchange", [pstAddress])).waitForDeployment();
+    let exchangeAddress = await exchangeContract.getAddress();
+    console.log("Exchange deployed to:", exchangeAddress);
 
-    console.log("Exchange deployed to:", await exchangeContract.getAddress());
+    if (network.name !== "hardhat") {
+        fs.writeFileSync(`${network.name}-deployed.json`, JSON.stringify({
+            PSTToken: pstAddress,
+            StorageExchange: exchangeAddress
+        }));
+    }
 }
 
 // We recommend this pattern to be able to use async/await everywhere
