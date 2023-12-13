@@ -4,6 +4,8 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "./gwt.sol";
 
+import "hardhat/console.sol";
+
 
 contract StorageExchange {
     GWTToken public gwtToken;// Gb per Week Token
@@ -45,7 +47,7 @@ contract StorageExchange {
         uint64 createPeriod; //创建时的周期编号
         uint64 effectivePeriod;//结束时的周期编号
 
-        uint32 minimumPurchaseSize;
+        uint64 minimumPurchaseSize;
         uint64 supplierId;
         OrderStatus status;
         uint64 remainingSize;
@@ -77,6 +79,7 @@ contract StorageExchange {
     uint64 public nextSupplierId = 1;
 
     mapping(uint64 => SystemState) public all_system_states;
+    // all_system_states[0]为初始参数
     uint64 public currentPeriod = 0;
 
     mapping(bytes32 => StorageUsage) public all_usage;//用于验证rootHash是否已经使用过
@@ -114,7 +117,21 @@ contract StorageExchange {
         // 10**18 / 56本身就会造成精度损失，这里试试不再除以这个值
         sysFixPeriodPerWeek = sysPeriodPerWeek;
         //为了减少除零风险，系统初始化时有1TB的算力，供需双方各10GB的挂单算力，并且已经有了2个已知的系统状态
-        
+        // 配置系统初始化的初值
+        SystemState memory init_state = SystemState(
+            block.number,
+            1024**4,    // totalActiveSize
+            10*1024**3, // totalSupplyOrderSize
+            10*1024**3, // totalDemandOrderSize
+            16,         // supplyRatio
+            16,         // demandRatio
+            32768       // rewardRate, 按照注释，rewardRate >> 15是一个0~2的浮点，那么32768 >> 15就正好等于1
+            );
+        all_system_states[0] = init_state;
+
+        // 启动的周期算是第一个周期
+        all_system_states[1] = init_state;
+        currentPeriod = 1;
     }
 
     function _getSystemStateIndexFromBlockNumber(uint64 currentPeriodStartBlockNumber,uint64 blockNumber) private view returns (uint64) {
@@ -181,7 +198,12 @@ contract StorageExchange {
         //price的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024
         // sysFixPeriodPerWeek = (10**18 / sysPeriodPerWeek)/128, 10**18是为了避免小数点,sysPeriodPerWeek=56
         // periodCount * (price >> 7) * size * sysFixPeriodPerWeek得到对应的GWT Token数量，再乘以10**gwtToken.decimals()得到对应的最小单位数量
-        return (periodCount * price * size * sysFixPeriodPerWeek * 10**gwtToken.decimals()) >> 7;
+        // return (periodCount * price * size * sysFixPeriodPerWeek * 10**gwtToken.decimals()) >> 7;
+
+        // size(GB) * (price/128) * effectivePeriod / sysFixPeriodPerWeek
+        // byte -> GB 是>> 30，price转倍数是>> 7，加起来是 >> 37
+        
+        return ((size * price * periodCount * (10**gwtToken.decimals())) >> 37) / sysFixPeriodPerWeek;
     }
 
     function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private view returns (uint256) {
@@ -209,8 +231,9 @@ contract StorageExchange {
     }
 
     //创建订单，大部分情况是供应单，也可以是需求单
-    function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 price, uint64 effectivePeriod, uint32 minimumPurchaseSize,
+    function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 price, uint64 effectivePeriod, uint64 minimumPurchaseSize,
                                 uint8 guaranteeRatio, bytes32 rootHash) public {
+        updateComputeState();
         require(effectivePeriod >= sysMinEffectivePeriod, "Effective time too short");
         require(price >= sysMinPrice, "Price too low");
         uint256 totalPrice = _calcTotalPrice(effectivePeriod, price,size);
@@ -219,13 +242,12 @@ contract StorageExchange {
         
         if(supplierId != 0) {
             StorageSupplier storage supplier = all_suppliers[supplierId];
-            require(_isValidOperator(supplier, msg.sender), "Only operator can create order");
+            require(msg.sender == supplier.cfo, "Only cfo can create order");
             require(minimumPurchaseSize >= sysMinPurchaseSize, "Minimum purchase size too small");
-            
-            gwtToken.transferFrom(supplier.cfo, address(this), depositAmount);
+            gwtToken.transferFrom(msg.sender, address(this), depositAmount);
         } else {
-            require(size >= sysMinDemandSize);
-            require(minimumPurchaseSize == size);
+            require(size >= sysMinDemandSize, "size less than min demand size");
+            require(minimumPurchaseSize == size, "size MUST equal minimumPurchaseSize");
             //需求方依旧可以通过depositAmount要求质押率
             gwtToken.transferFrom(msg.sender, address(this), totalPrice);
         }
@@ -238,7 +260,7 @@ contract StorageExchange {
         order.price = price;
         order.guaranteeRatio = guaranteeRatio;
         order.createPeriod = currentPeriod;
-        order.effectivePeriod = effectivePeriod;
+        order.effectivePeriod = currentPeriod + effectivePeriod;
         order.minimumPurchaseSize = minimumPurchaseSize;
         order.status = OrderStatus.Waiting;
         order.remainingSize = size;
@@ -278,6 +300,7 @@ contract StorageExchange {
 
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         StorageUsage storage usage = all_usage[rootHash];
         require(usage.size == 0, "Usage Already exists");
@@ -285,7 +308,8 @@ contract StorageExchange {
         require(order.remainingSize >= size, "Not enough storage available");
         require(size >= order.minimumPurchaseSize, "size too small");
         //还有足够的有效期,TODO所有处理有效期为周的地方都要检查
-        require(order.effectivePeriod - currentPeriod >= sysMinEffectivePeriod, "Not enough effective time");
+        require(order.effectivePeriod > currentPeriod, "order has invalid");
+        require(order.effectivePeriod - currentPeriod >= duration, "order not enough effective time");
         //只有订单创建开始一小段时间后，才能购买
         require(currentPeriod - order.createPeriod > sysMinActivePeriod, "wait order active");
        
@@ -298,6 +322,7 @@ contract StorageExchange {
         usage.effectivePeriod = duration;//在active之前这里保存的是购买时长，active后变成结束时间 （能节约gas fee么？）
         //usage.effectivePeriod = currentPeriod + (order.effectivePeriod);
         usage.status = UsageStatus.Waiting;
+        usage.size = size;
 
         order.status = OrderStatus.Active;
         order.remainingSize -= size;
@@ -310,7 +335,9 @@ contract StorageExchange {
     }
 
     //向一个订单发送报价意向
+    // 成交一个买单，是不是该用这个函数？缺少Usage的处理逻辑？但为什么叫报价意向？还有竞价的逻辑么？
     function makeOffer(uint64 supplierId,uint64 orderId,bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand orders can receive offers");
         require(order.status == OrderStatus.Waiting, "Only waiting order can receive offers");
@@ -334,6 +361,7 @@ contract StorageExchange {
     // TODO:已经事实上没有usage的订单是否可以取消？这里的计算有点复杂
     // TODO:处理买单取消应该另开一个函数？
     function cancelOrder(uint64 orderId) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require((order.supplierId !=0), "Only standard order can be cancelled");
 
@@ -352,6 +380,7 @@ contract StorageExchange {
 
     //释放限制空间并返还对应的保证金
     function freeOrderSpace(uint64 orderId,uint64 freeSize) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         require((order.supplierId !=0), "Only standard order can be free");
@@ -376,6 +405,7 @@ contract StorageExchange {
     }
 
     function confirmUsageRoot(uint64 orderId,bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         StorageSupplier storage supplier = all_suppliers[order.supplierId];
         StorageUsage storage usage = all_usage[rootHash];
@@ -405,6 +435,7 @@ contract StorageExchange {
 
     // 发起存储挑战
     function challenge(uint64 orderId,bytes32 rootHash, bytes32 challengeHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId != 0, "Only standard order can be challenged");
         
@@ -429,6 +460,7 @@ contract StorageExchange {
 
     // 响应简单挑战
     function respondChallenge(uint64 orderId, bytes32 rootHash,bytes calldata rawData) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
 
@@ -445,6 +477,7 @@ contract StorageExchange {
 
     //end & withdraw:  超时后，确认挑战成功，并提款 DONE
     function challengeSuccess(uint64 orderId, bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
 
@@ -492,6 +525,7 @@ contract StorageExchange {
 
     //end & withdraw:  供应商主动说明数据丢失,DONE
     function reportDataLost(uint64 orderId, bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
 
@@ -541,6 +575,7 @@ contract StorageExchange {
 
     //认为挑战设置的challengeHash并不是roothash的Merkle叶子节点
     function declearChallengeIllegal(uint64 orderId, bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
         StorageUsage storage usage = all_usage[rootHash];
@@ -558,6 +593,7 @@ contract StorageExchange {
 
     //end & withdraw: 展示叶子节点的路径并验证,DONE
     function showChallengePath(uint64 orderId,bytes32 rootHash,uint64 dataIndex,bytes32[] calldata fullPath) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         require(order.supplierId == 0, "Only demand order can be challenged");
         StorageUsage storage usage = all_usage[rootHash];
@@ -626,6 +662,7 @@ contract StorageExchange {
     }
     
     function leave(uint64 orderId,uint64 supplierId ) public {
+        updateComputeState();
         require(supplierId != 0, "Only supplier can leave");
 
         StorageOrder storage order = orders[orderId];
@@ -644,6 +681,7 @@ contract StorageExchange {
     }
 
     function resumeFromLeave(uint64 orderId,uint64 supplierId) public {
+        updateComputeState();
         require(supplierId != 0, "Only supplier can leave");
 
         StorageOrder storage order = orders[orderId];
@@ -657,6 +695,7 @@ contract StorageExchange {
 
     //活动订单中途提现 （必须是active）,DONE
     function withDraw(uint64 orderId, bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         StorageUsage storage usage = all_usage[rootHash];
         require(usage.orderId == orderId, "orderid not match");
@@ -693,6 +732,7 @@ contract StorageExchange {
 
     //end & withdraw,订单到期正常结束,调用会触发提现,DONE
     function endUsage(uint64 orderId, bytes32 rootHash) public {
+        updateComputeState();
         StorageOrder storage order = orders[orderId];
         StorageUsage storage usage = all_usage[rootHash];
         require(usage.orderId == orderId, "orderid not match");
@@ -731,7 +771,7 @@ contract StorageExchange {
     
 
     // 更新算力奖励
-    function updateComputeState(uint256 orderId) public {
+    function updateComputeState() public {
         SystemState storage state = all_system_states[currentPeriod];
         //判断是否可以结束当前period
         if(block.number - state.blockNumber <= sysBlockPerPeriod) {
@@ -771,7 +811,15 @@ contract StorageExchange {
         //挂单奖励是根据rewardRate,suplyRation,demandRation计算，这里不用更新
         SystemState memory newState = state;
         newState.blockNumber = block.number;//TODO:还是应该用  lastState.blockNumber + sysBlockPerPeriod?
-        currentPeriod++;
+        // 要不要考虑一段时间内，没有任何交易的情况？可能会跳周期
+        // 先做一个跳周期的逻辑，让测试可以跑过
+        // 真实系统中，第一个卖单和买单也可能出现不跳周期不能成交的情况
+        uint64 skipPeriod = uint64((block.number - all_system_states[0].blockNumber) / sysBlockPerPeriod);
+        // 不知道这里用一个ceil()逻辑对不对......
+        if (sysBlockPerPeriod * skipPeriod < block.number - all_system_states[0].blockNumber) {
+            skipPeriod++;
+        }
+        currentPeriod = currentPeriod + skipPeriod;
         all_system_states[currentPeriod] = newState;
     }
 

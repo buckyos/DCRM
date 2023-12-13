@@ -17,7 +17,9 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-network-helpers": "^1.0.9",
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@types/chai-almost": "^1.0.3",
     "chai": "^4.3.10",
+    "chai-almost": "^1.0.1",
     "hardhat": "^2.19.1",
     "hardhat-abi-exporter": "^2.10.1",
     "ts-node": "^10.9.1",
