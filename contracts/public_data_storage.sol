@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+import "./gwt.sol";
 
 interface IERCPublicDataContract {
+    // return contract`s owner
+    function owner() external view returns (address);
     //return the owner of the data
-    function getDataOwner(bytes32 dataHash) public view returns (address);
+    function getDataOwner(bytes32 dataHash) external view returns (address);
 
     //return token data hash
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
@@ -18,13 +21,20 @@ contract PublicDataStorage {
         uint256 score;
     }
 
+    // 为了编译通过
+    GWTToken public gwtToken;// Gb per Week Token
+    mapping(uint64 => StorageSupplier) public all_supplier;
+    struct StorageSupplier {
+        address cfo;//财务操作
+    }
+
     mapping(bytes32 => PublicData) public_datas;
     uint256 system_reward_pool;
     mapping(bytes32 => uint256) data_balance;
     mapping(uint256 => mapping(uint256 => bool)) all_shows;
 
     function getDataSize(bytes32 dataHash) public pure returns (uint64) {
-        return uint64(dataHash >> 192);
+        return uint64(uint256(dataHash) >> 192);
     }
 
     function _verifyData(
@@ -42,13 +52,12 @@ contract PublicDataStorage {
         address publicDataContract,
         uint256 tokenId
     ) public {
-        PublicData memory publicDataInfo = new PublicData(dataMixedHash);
-        publicDataInfo.sponsor = msg.sender;
+        PublicData memory publicDataInfo = PublicData(dataMixedHash, msg.sender, msg.sender, 0, 0);
         if (publicDataContract == address(0)) {
             publicDataInfo.owner = msg.sender;
         } else if (tokenId == 0) {
             // token id must be greater than 0
-            publicDataInfo.owner = publicDataContract.owner();
+            publicDataInfo.owner = IERCPublicDataContract(publicDataContract).owner();
         } else {
             // if provided token id, then dataMixedHash will be ignored
             require(
@@ -58,20 +67,20 @@ contract PublicDataStorage {
                     )
             );
             publicDataInfo.owner = IERCPublicDataContract(publicDataContract)
-                .getDataOwner(publicDataInfo.hash);
+                .getDataOwner(publicDataInfo.mixedHash);
         }
 
         // transfer deposit
         require(depositRatio >= 48);
 
         // get data size from data hash
-        uint64 dataSize = getDataSize(publicDataInfo.hash);
+        uint64 dataSize = getDataSize(publicDataInfo.mixedHash);
         uint256 depositAmount = (depositRatio * dataSize * 10 ** 18) >> 30;
 
         publicDataInfo.maxDeposit = depositAmount;
 
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-        data_balance[publicDataInfo.hash] += (depositAmount * 8) / 10;
+        data_balance[publicDataInfo.mixedHash] += (depositAmount * 8) / 10;
         system_reward_pool += depositAmount - ((depositAmount * 8) / 10);
 
         public_datas[dataMixedHash] = publicDataInfo;
@@ -79,18 +88,18 @@ contract PublicDataStorage {
 
     function addDeposit(bytes32 dataMixedHash, uint64 depositRatio) public {
         PublicData storage publicDataInfo = public_datas[dataMixedHash];
-        require(publicDataInfo.hash != 0);
+        require(publicDataInfo.mixedHash != bytes32(0));
         require(publicDataInfo.owner == msg.sender);
 
         // transfer deposit
         require(depositRatio >= 48);
 
         // get data size from data hash
-        uint64 dataSize = getDataSize(publicDataInfo.hash);
+        uint64 dataSize = getDataSize(publicDataInfo.mixedHash);
         uint256 depositAmount = (depositRatio * dataSize * 10 ** 18) >> 30;
 
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-        data_balance[publicDataInfo.hash] += (depositAmount * 8) / 10;
+        data_balance[publicDataInfo.mixedHash] += (depositAmount * 8) / 10;
         system_reward_pool += depositAmount - ((depositAmount * 8) / 10);
 
         if (depositAmount > ((publicDataInfo.maxDeposit * 11) / 10)) {
@@ -108,7 +117,7 @@ contract PublicDataStorage {
         return true;
     }
 
-    function showData(uint supplierId, bytes32 dataMixedHash) public {
+    function showData(uint64 supplierId, bytes32 dataMixedHash) public {
         require(_validPublicSupplier(supplierId, dataMixedHash));
         require(all_supplier[supplierId].cfo == msg.sender);
         require(all_shows[block.number][supplierId] == false);
