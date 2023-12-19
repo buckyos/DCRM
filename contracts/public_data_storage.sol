@@ -246,7 +246,7 @@ contract PublicDataStorage {
     }
 
 
-    function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal view returns(bool) {
+    function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
         uint256 supplierPledge = supplier_pledge[supplierAddress];
         uint64 dataSize = getDataSize(dataMixedHash);
         return supplierPledge > 16 * _dataSizeToGWT(dataSize);
@@ -256,6 +256,7 @@ contract PublicDataStorage {
     // show_hash = keccak256(abiEncode[sender, dataMixedHash, prev_block_hash, block_number])
     function showData(bytes32 dataMixedHash, bytes32 showHash) public {
         address supplier = msg.sender;
+        require(data_suppliers[dataMixedHash][supplier] == true);
         require(_validPublicSupplier(supplier, dataMixedHash));
         // 每个块的每个supplier只能show一次数据
         require(all_shows[block.number][supplier] == false);      
