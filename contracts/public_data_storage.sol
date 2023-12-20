@@ -289,7 +289,7 @@ contract PublicDataStorage {
 
         // 更新这次cycle的score排名
         if (cycleInfo.score_list.maxlen() < topRewards) {
-            cycleInfo.score_list.SetMaxLen(topRewards);
+            cycleInfo.score_list.setMaxLen(topRewards);
         }
         cycleInfo.score_list.updateScore(dataMixedHash, dataInfo.score);
         

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "hardhat/console.sol";
+
 library SortedScoreList {
     struct List {
         uint256 max_length;
@@ -12,16 +14,20 @@ library SortedScoreList {
     function _ensureSize(List storage self) private {
         uint32 cur_length = 0;
         bytes32 current = self.head;
+        bytes32 prev = current;
         while (cur_length < self.max_length && current != bytes32(0)) {
             cur_length += 1;
+            prev = current;
             current = self.sorted[current];
         }
 
         // 这里其实只会去掉最后一个
         if (current != bytes32(0)) {
-            self.sorted[current] = bytes32(0);
+            self.sorted[prev] = bytes32(0);
             delete self.scores[current];
             delete self.sorted[current];
+
+            console.log("after length %d", length(self));
         }
     }
 
@@ -47,36 +53,39 @@ library SortedScoreList {
     }
 
     function updateScore(List storage self, bytes32 mixedHash, uint256 score) public {
-        if (score == 0) {
+        if (self.scores[mixedHash] == score) {
             return;
         }
-        if (self.head == bytes32(0)) {  // 第一个插入的数据
-            self.head = mixedHash;
-            self.scores[mixedHash] = score;
-        } else {
-            // 由于max_length有限，这里做两次遍历也并不过多消耗性能
-            _deleteScore(self, mixedHash);
 
-            bytes32 current = self.head;
-            while (true) {
-                bytes32 next = self.sorted[current];
-                // 同score的数据先到先占，这里利用了score的默认值为0的特性，这个循环一定会结束
-                if (self.scores[next] < score) {
-                    // TODO: 如果插入的数据是最后一个的话，会变成先插入再删除，这里可以优化
+        // 由于max_length有限，这里做两次遍历也并不过多消耗性能
+        _deleteScore(self, mixedHash);
 
-                    self.sorted[mixedHash] = next;
-                    self.sorted[current] = mixedHash;
-                    self.scores[mixedHash] = score;
-                    
-                    break;
+        bytes32 currect = self.head;
+        bytes32 prev = bytes32(0);
+        uint cur_index = 0;
+        while (true) {
+            // 同score的数据先到先占，这里利用了score的默认值为0的特性，这个循环一定会结束
+            if (self.scores[currect] < score) {
+                // TODO: 如果插入的数据是最后一个的话，会变成先插入再删除，这里可以优化
+                if (prev != bytes32(0)) {
+                    self.sorted[prev] = mixedHash;
                 }
-                current = next;
-                next = self.sorted[current];
+                self.sorted[mixedHash] = currect;
+                self.scores[mixedHash] = score;
+                break;
             }
-
-            // 这里认为，往存储里写一个bytes32 end的值，比遍历要贵
-            _ensureSize(self);
+            cur_index += 1;
+            prev = currect;
+            currect = self.sorted[currect];
         }
+
+        if (cur_index == 0) {
+            console.log("insert into head");
+            self.head = mixedHash;
+        }
+
+        // 这里认为，往存储里写一个bytes32 end的值，比遍历要贵
+        _ensureSize(self);
     }
 
     function length(List storage self) public view returns (uint256) {
@@ -118,8 +127,8 @@ library SortedScoreList {
         return 0;
     }
 
-    function SetMaxLen(List storage self, uint256 max_length) public {
-        require(max_length > self.max_length);
+    function setMaxLen(List storage self, uint256 max_length) public {
+        require(max_length > self.max_length, "max_length must be greater than current max_length");
         self.max_length = max_length;
     }
 

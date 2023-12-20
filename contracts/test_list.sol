@@ -18,4 +18,20 @@ contract TestList {
     function getSortedList() public view returns (bytes32[] memory) {
         return list.getSortedList();
     }
+
+    function setMaxLen(uint256 maxLen) public {
+        list.setMaxLen(maxLen);
+    }
+
+    function maxLen() public view returns (uint256) {
+        return list.maxlen();
+    }
+
+    function exists(bytes32 mixedHash) public view returns (bool) {
+        return list.exists(mixedHash);
+    }
+
+    function getRanking(bytes32 mixedHash) public view returns (uint256) {
+        return list.getRanking(mixedHash);
+    }
 }
