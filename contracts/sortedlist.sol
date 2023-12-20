@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "hardhat/console.sol";
-
 library SortedScoreList {
     struct List {
         uint256 max_length;
@@ -26,8 +24,6 @@ library SortedScoreList {
             self.sorted[prev] = bytes32(0);
             delete self.scores[current];
             delete self.sorted[current];
-
-            console.log("after length %d", length(self));
         }
     }
 
@@ -80,7 +76,6 @@ library SortedScoreList {
         }
 
         if (cur_index == 0) {
-            console.log("insert into head");
             self.head = mixedHash;
         }
 

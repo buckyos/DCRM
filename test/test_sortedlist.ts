@@ -2,8 +2,6 @@ import hre from "hardhat";
 import { expect } from "chai";
 import { TestList } from "../typechain-types";
 
-const toSorted = require('array.prototype.tosorted')
-
 const testDatas = [
     { "hash": "0x39c767e230f1cc4d8fa7baa4ef8c39bc2e4add8680d09bfe086e1efdaa0d6437", "score": 290 }, // 10
     { "hash": "0x96aa737f656f90a2f6f90a293b404f2a44529add34f863a18bf51d47bbaec589", "score": 332 }, // 9

@@ -7,8 +7,6 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 using SortedScoreList for SortedScoreList.List;
 
 interface IERCPublicDataContract {
-    // return contract`s owner
-    function owner() external view returns (address);
     //return the owner of the data
     function getDataOwner(bytes32 dataHash) external view returns (address);
 
