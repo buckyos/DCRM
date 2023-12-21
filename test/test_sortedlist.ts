@@ -31,7 +31,7 @@ const sortdatas = testDatas.toSorted((a: any, b: any) => {
     }
 })
 
-describe("ShortedList", function () {
+describe("SortedList", function () {
     let contract: TestList;
     async function deployContracts() {
         let listLibrary = await (await hre.ethers.getContractFactory("SortedScoreList")).deploy();
