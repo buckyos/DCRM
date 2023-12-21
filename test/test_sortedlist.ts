@@ -61,7 +61,6 @@ describe("SortedList", function () {
     it("one element", async () => {
         await (await contract.addScore(testDatas[0].hash, testDatas[0].score)).wait();
 
-        expect(await contract.exists(testDatas[0].hash)).to.equal(true);
         expect(await contract.getLength()).to.equal(1);
 
         expect(await contract.getRanking(testDatas[0].hash)).to.equal(1);

@@ -340,7 +340,8 @@ contract PublicDataStorage {
         require(block.number > cycleNumber * blocksPerCycle + startBlock);
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
-        require(cycleInfo.score_list.exists(dataMixedHash));
+        uint256 scoreListRanking = cycleInfo.score_list.getRanking(dataMixedHash);
+        require(scoreListRanking > 0);
 
         // 看看是谁来取
         uint8 withdrawUser = _getWithdrawUser(dataMixedHash);
@@ -352,7 +353,7 @@ contract PublicDataStorage {
         uint256 totalReward = cycleInfo.total_award * 8 / 10;
         // 积分规则我先自己定一个, 参见最顶上的注释
         uint256 totalScore = (1 + topRewards) * topRewards / 2;
-        uint256 ranking = topRewards - cycleInfo.score_list.getRanking(dataMixedHash) + 1;
+        uint256 ranking = topRewards - scoreListRanking + 1;
         uint256 dataReward = totalReward * ranking / totalScore;
 
         uint256 reward = _calcuteReward(withdrawUser, dataReward);

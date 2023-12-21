@@ -27,10 +27,6 @@ contract TestList {
         return list.maxlen();
     }
 
-    function exists(bytes32 mixedHash) public view returns (bool) {
-        return list.exists(mixedHash);
-    }
-
     function getRanking(bytes32 mixedHash) public view returns (uint256) {
         return list.getRanking(mixedHash);
     }
