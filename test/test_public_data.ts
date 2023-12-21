@@ -29,6 +29,8 @@ describe("PublicDataStorage", function () {
 
         nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
 
+
+        // TODO:
 //        contract = await (await hre.ethers.deployContract("PublicDataStorage", {libraries: {
 //            SortedScoreList: await listLibrary.getAddress()
 //        }})).waitForDeployment();
@@ -37,7 +39,10 @@ describe("PublicDataStorage", function () {
     before(async () => {
         await deployContracts();
 
-//        await ((await nftContract.addData("", 1)).wait());
+
+        // TODO:
+
+        // await ((await nftContract.addData("", 1)).wait());
     });
 
     it("create NFT public data");
