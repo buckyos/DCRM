@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 using SortedScoreList for SortedScoreList.List;
 
@@ -36,14 +37,26 @@ contract PublicDataStorage {
         uint256 maxDeposit;
     }
 
+    struct SupplierInfo {
+        mapping(bytes32 => uint256) pledge;
+        uint256 lastShowBlock;
+    }
+
     GWTToken public gwtToken;// Gb per Week Token
 
-    mapping(address => uint256) supplier_pledge;
-    mapping(bytes32 => mapping(address => bool)) data_suppliers;
+    mapping(address => SupplierInfo) supplier_pledge;
 
     mapping(bytes32 => PublicData) public_datas;
     uint256 system_reward_pool;
     mapping(bytes32 => uint256) data_balance;
+    // 这里相当于记得是supplier的show记录，共挑战用
+    struct ShowData {
+        uint256 nonce_block;
+        uint256 show_block;
+        uint256 rewardAmount;
+        bytes32 minHash;
+    }
+    mapping(address => mapping(bytes32 => ShowData)) show_datas;
     mapping(uint256 => mapping(address => bool)) all_shows;
 
     struct CycleDataInfo {
@@ -66,15 +79,17 @@ contract PublicDataStorage {
     // 合约常量参数
     uint256 constant public blocksPerCycle = 17280;
     uint256 constant public topRewards = 16;
+    uint256 constant public lockAfterShow = 240;    // 成功的SHOW一小时内不允许提现
+    uint256 constant public maxNonceBlockDistance = 2;  // 允许的nonce block距离, lockAfterShow + maxNonceBlockDistance要小于256
+    uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
 
-    event GWTStacked(address supplier, uint256 amount);
-    event GWTUnstacked(address supplier, uint256 amount);
-    event MarkData(address supplier, bytes32 mixedHash, uint256 lockedAmount);
-    event UnmarkData(address supplier, bytes32 mixedHash, uint256 lockedAmount);
+    event GWTStacked(address supplier, bytes32 mixedHash, uint256 amount);
+    event GWTUnstacked(address supplier, bytes32 mixedHash, uint256 amount);
     event PublicDataCreated(bytes32 mixedHash);
     event SponserChanged(bytes32 mixedHash, address oldSponser, address newSponser);
     event DataShowed(bytes32 mixedHash, address shower, uint256 score);
     event Withdraw(bytes32 mixedHash, address user, uint256 amount);
+    event ChallengeSuccess(address challenger, address challenged, uint256 show_block_number, bytes32 mixedHash, uint256 amount);
 
     constructor(address _gwtToken) {
         gwtToken = GWTToken(_gwtToken);
@@ -83,15 +98,6 @@ contract PublicDataStorage {
 
     function getDataSize(bytes32 dataHash) public pure returns (uint64) {
         return uint64(uint256(dataHash) >> 192);
-    }
-
-    function _verifyData(
-        address sender,
-        bytes32 dataMixedHash,
-        bytes32 blockHash,
-        bytes32 showHash
-    ) internal view returns(bool) {
-        return showHash == keccak256(abi.encodePacked(sender, dataMixedHash, blockHash, block.number));
     }
 
     function _verifyBlockNumber(bytes32 dataMixedHash, uint256 blockNumber) internal pure returns(bool) {
@@ -201,69 +207,67 @@ contract PublicDataStorage {
         }
     }
 
-    function pledgeGWT(uint256 amount) public {
+    function dataBalance(bytes32 dataMixedHash) public view returns(uint256) {
+        return data_balance[dataMixedHash];
+    }
+
+    function pledgeGWT(uint256 amount, bytes32 dataMixedHash) public {
         gwtToken.transferFrom(msg.sender, address(this), amount);
-        supplier_pledge[msg.sender] += amount;
+        supplier_pledge[msg.sender].pledge[dataMixedHash] += amount;
 
-        emit GWTStacked(msg.sender, amount);
+        emit GWTStacked(msg.sender, dataMixedHash, amount);
     }
 
-    function unstakeGWT(uint256 amount) public {
-        require(supplier_pledge[msg.sender] >= amount);
+    function unstakeGWT(uint256 amount, bytes32 dataMixedHash) public {
+        // 如果没SHOW过的话，lastShowBlock为0，可以提取
+        require(block.number > supplier_pledge[msg.sender].lastShowBlock + lockAfterShow);
+        require(supplier_pledge[msg.sender].pledge[dataMixedHash] >= amount);
         gwtToken.transfer(msg.sender, amount);
-        supplier_pledge[msg.sender] -= amount;
+        supplier_pledge[msg.sender].pledge[dataMixedHash] -= amount;
 
-        emit GWTUnstacked(msg.sender, amount);
+        emit GWTUnstacked(msg.sender, dataMixedHash, amount);
     }
-
-
-    // supplier表示自己将要show对应的数据
-    function markData(bytes32 mixedHash) public {
-        address supplier = msg.sender;
-        PublicData memory publicDataInfo = public_datas[mixedHash];
-        require(publicDataInfo.mixedHash != bytes32(0));
-        require(data_suppliers[mixedHash][supplier] == false);
-
-        uint256 lockedAmount = _dataSizeToGWT(getDataSize(mixedHash));
-        require(supplier_pledge[supplier] >= lockedAmount);
-
-        // lock gwt
-        supplier_pledge[supplier] -= lockedAmount;
-        data_suppliers[mixedHash][supplier] = true;
-    }
-
-    function unmarkData(bytes32 mixedHash) public {
-        address supplier = msg.sender;
-        PublicData memory publicDataInfo = public_datas[mixedHash];
-        require(publicDataInfo.mixedHash != bytes32(0));
-        require(data_suppliers[mixedHash][supplier] == true);
-
-        uint256 lockedAmount = _dataSizeToGWT(getDataSize(mixedHash));
-        supplier_pledge[supplier] += lockedAmount;
-        data_suppliers[mixedHash][supplier] = false;
-    }
-
 
     function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
-        uint256 supplierPledge = supplier_pledge[supplierAddress];
-        uint64 dataSize = getDataSize(dataMixedHash);
-        return supplierPledge > 16 * _dataSizeToGWT(dataSize);
+        uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
+        uint256 showReward = data_balance[public_datas[dataMixedHash].mixedHash] / 10;
+        return supplierPledge > 2 * showReward;
+    }
+
+    function _verifyData(
+        bytes32 nonce,
+        uint256 pos,
+        uint32 index,
+        bytes32[] calldata m_path,
+        bytes calldata leafdata,
+        bytes32 noise
+    ) internal returns(bool) {
+        // TODO：如何通过index和m_path检验这个index是否正确？
+
+        bytes32 leaf_hash = keccak256(abi.encodePacked(leafdata[:pos], nonce, noise, leafdata[pos:]));
+        bytes32 merkleHash = MerkleProof.processProofCalldata(m_path, leaf_hash);
+        
+        // 判断hash的最后N位是否为0
+        return uint256(merkleHash) & 1 << difficulty - 1 == 0;
     }
 
     // msg.sender is supplier
     // show_hash = keccak256(abiEncode[sender, dataMixedHash, prev_block_hash, block_number])
-    function showData(bytes32 dataMixedHash, bytes32 showHash) public {
+    function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata, bytes32 noise) public {
         address supplier = msg.sender;
-        require(data_suppliers[dataMixedHash][supplier] == true);
+        require(nonce_block < block.number && block.number - nonce_block < maxNonceBlockDistance);
         require(_validPublicSupplier(supplier, dataMixedHash));
         // 每个块的每个supplier只能show一次数据
-        require(all_shows[block.number][supplier] == false);      
+        require(all_shows[block.number][supplier] == false);
 
         // check block.number meets certain conditions
         require(_verifyBlockNumber(dataMixedHash, block.number));
 
+        bytes32 nonce = blockhash(nonce_block);
+        uint256 pos = uint256(nonce) % 960 + 32;    // 产生的pos在[32, 992]
+
         // check showHash is correct
-        require(_verifyData(supplier, dataMixedHash, blockhash(block.number - 1), showHash));
+        require(_verifyData(nonce, pos, index, m_path, leafdata, noise));
 
         PublicData storage publicDataInfo = public_datas[dataMixedHash];
 
@@ -283,7 +287,12 @@ contract PublicDataStorage {
         if (reward > 0) {
             gwtToken.transfer(supplier, reward);
             data_balance[publicDataInfo.mixedHash] -= reward;
+            supplier_pledge[supplier].lastShowBlock = block.number;
         }
+
+        // 记录minhash供挑战
+        bytes32 minMerkleHash = MerkleProof.processProofCalldata(m_path, keccak256(abi.encodePacked(leafdata[:pos], nonce, leafdata[pos:])));
+        show_datas[supplier][dataMixedHash] = ShowData(nonce_block, block.number, reward, minMerkleHash);
 
         // 更新这次cycle的score排名
         if (cycleInfo.score_list.maxlen() < topRewards) {
@@ -294,6 +303,25 @@ contract PublicDataStorage {
         all_shows[block.number][supplier] = true;
 
         emit DataShowed(dataMixedHash, supplier, dataInfo.score);
+    }
+
+    // 挑战challengeTo在show_block_number上对dataMixedHash的show
+    function challenge(address challengeTo, bytes32 dataMixedHash, uint256 show_block_number, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) public {
+        require(show_block_number == show_datas[challengeTo][dataMixedHash].show_block);
+        require(block.number < show_block_number + lockAfterShow);
+
+        //TODO: 如何验证index是正确的？
+        bytes32 nonce = blockhash(show_datas[challengeTo][dataMixedHash].nonce_block);
+        uint256 pos = uint256(nonce) % 960 + 32;    // 产生的pos在[32, 992]
+
+        bytes32 minMerkleHash = MerkleProof.processProofCalldata(m_path, keccak256(abi.encodePacked(leafdata[:pos], nonce, leafdata[pos:])));
+        if (uint256(minMerkleHash) < uint256(show_datas[challengeTo][dataMixedHash].minHash)) {
+            // 扣除奖励的2倍
+            uint256 reward = show_datas[challengeTo][dataMixedHash].rewardAmount * 2;
+            supplier_pledge[challengeTo].pledge[dataMixedHash] -= reward;
+            gwtToken.transfer(msg.sender, reward);
+            emit ChallengeSuccess(msg.sender, challengeTo, show_block_number, dataMixedHash, reward);
+        }
     }
 
     function _getDataOwner(bytes32 dataMixedHash) internal view returns(address) {
@@ -309,29 +337,36 @@ contract PublicDataStorage {
     function _getWithdrawUser(bytes32 dataMixedHash) internal view returns(uint8) {
         address sender = msg.sender;
         PublicData memory publicDataInfo = public_datas[dataMixedHash];
+        uint8 user = 0;
         if (sender == publicDataInfo.sponsor) {
-            return 1;
-        } else if (sender == _getDataOwner(dataMixedHash)) {
-            return 7;
-        } else {
-            CycleDataInfo memory dataInfo = cycle_infos[_cycleNumber()].data_infos[dataMixedHash];
-            for (uint i = 0; i < dataInfo.last_showers.length; i++) {
-                if (dataInfo.last_showers[i] == sender) {
-                    return uint8(i + 2);
-                }
-            }
-            return 0;
+            user |= 1 << 1;
         }
+
+        if (sender == _getDataOwner(dataMixedHash)) {
+            user |= 1 << 7;
+        } 
+    
+        CycleDataInfo memory dataInfo = cycle_infos[_cycleNumber()].data_infos[dataMixedHash];
+        for (uint8 i = 0; i < dataInfo.last_showers.length; i++) {
+            if (dataInfo.last_showers[i] == sender) {
+                user |= uint8(1 << (i+2));
+            }
+        }
+
+        return user;
     }
 
     // sponser拿50%, owner拿20%, 5个last shower平分30%
-    function _calcuteReward(uint8 user, uint256 totalReward) internal pure returns(uint256) {
-        if (user == 1) {
-            return totalReward / 2;
-        } else if (user == 7) {
-            return totalReward / 5;
-        } else {
-            return totalReward - (totalReward * 7 / 10) / 5;
+    function _calcuteReward(uint8 user, uint256 totalReward, uint256 last_shower_length) internal pure returns(uint256) {
+        uint reward = 0;
+        if ((user >> 7) & 1 == 1) {
+            reward += totalReward / 2;
+        } 
+        if ((user >> 1) & 1 == 1) {
+            reward += totalReward / 5;
+        }
+        if (user & 124 > 0) {
+            reward += (totalReward - totalReward / 2 - totalReward / 5) / last_shower_length;
         }
     }
 
@@ -347,7 +382,7 @@ contract PublicDataStorage {
         uint8 withdrawUser = _getWithdrawUser(dataMixedHash);
 
         require(withdrawUser > 0);
-        require(dataInfo.withdraw_status & uint8(1 << withdrawUser) == 0);
+        require(dataInfo.withdraw_status & withdrawUser == 0);
 
         // 计算该得到多少奖励
         uint256 totalReward = cycleInfo.total_award * 8 / 10;
@@ -356,11 +391,11 @@ contract PublicDataStorage {
         uint256 ranking = topRewards - scoreListRanking + 1;
         uint256 dataReward = totalReward * ranking / totalScore;
 
-        uint256 reward = _calcuteReward(withdrawUser, dataReward);
+        uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.last_showers.length);
         gwtToken.transfer(msg.sender, reward);
         
         // 设置已取标志
-        dataInfo.withdraw_status |= uint8(1 << withdrawUser);
+        dataInfo.withdraw_status |= withdrawUser;
 
 
         emit Withdraw(dataMixedHash, msg.sender, reward);
