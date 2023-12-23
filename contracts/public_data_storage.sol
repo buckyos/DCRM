@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 using SortedScoreList for SortedScoreList.List;
 
+//Review:这个作为ERC的一部分，要仔细考虑一下
 interface IERCPublicDataContract {
     //return the owner of the data
     function getDataOwner(bytes32 dataHash) external view returns (address);
@@ -14,6 +15,7 @@ interface IERCPublicDataContract {
     //return token data hash
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
 }
+// Review: 考虑有一些链的出块时间不确定,使用区块间隔要谨慎，可以用区块的时间戳
 
 /**
  * 有关奖励逻辑：
@@ -21,6 +23,8 @@ interface IERCPublicDataContract {
  * 因此，在每次收入奖励时，更新本周期的奖励额度
  * 当本周期奖励额度为0时，以上个周期的奖励*0.2起始
  * 可能有精度损失？
+ * 
+ * 
  */
 
 /**
@@ -29,7 +33,7 @@ interface IERCPublicDataContract {
 
 contract PublicDataStorage {
     struct PublicData {
-        bytes32 mixedHash;
+        //bytes32 mixedHash;
         address owner;
         address sponsor;
         address nftContract;
@@ -47,7 +51,7 @@ contract PublicDataStorage {
     mapping(address => SupplierInfo) supplier_pledge;
 
     mapping(bytes32 => PublicData) public_datas;
-    uint256 system_reward_pool;
+    
     mapping(bytes32 => uint256) data_balance;
     // 这里相当于记得是supplier的show记录，共挑战用
     struct ShowData {
@@ -75,8 +79,11 @@ contract PublicDataStorage {
     mapping(uint256 => CycleInfo) cycle_infos;
 
     uint256 startBlock;
+    uint256 sysBalance = 0;
 
     // 合约常量参数
+    uint256 sysMinDepositRatio = 64;
+    uint256 sysMinPublicDataStorageWeeks = 96;
     uint256 constant public blocksPerCycle = 17280;
     uint256 constant public topRewards = 32;
     uint256 constant public lockAfterShow = 240;    // 成功的SHOW一小时内不允许提现
@@ -90,7 +97,7 @@ contract PublicDataStorage {
     event PublicDataCreated(bytes32 mixedHash);
     event SponserChanged(bytes32 mixedHash, address oldSponser, address newSponser);
     event DataShowed(bytes32 mixedHash, address shower, uint256 score);
-    event Withdraw(bytes32 mixedHash, address user, uint256 amount);
+    event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
     event ChallengeSuccess(address challenger, address challenged, uint256 show_block_number, bytes32 mixedHash, uint256 amount);
 
     constructor(address _gwtToken) {
@@ -129,17 +136,21 @@ contract PublicDataStorage {
         return cycleNumber;
     }
 
+    //REVIEW:至在增加余额的时候更新周期会不会有潜在的bug? 比如存在周期空洞
     function _addCycleReward(uint256 amount) private {
         uint256 cycleNumber = _cycleNumber();
         CycleInfo storage cycleInfo = cycle_infos[cycleNumber];
         if (cycleInfo.total_award == 0) {
             uint256 lastCycleReward = cycle_infos[cycleNumber - 1].total_award;
-            cycleInfo.total_award += lastCycleReward - (lastCycleReward * 4 / 5);
+            cycleInfo.total_award = (lastCycleReward * 3 / 20);
+            sysBalance +=  (lastCycleReward / 20);
+            cycle_infos[cycleNumber - 1].total_award = lastCycleReward * 4 / 5;
         }
         cycleInfo.total_award += amount;
     }
 
     // 计算这些空间对应多少GWT，单位是wei
+    //TODO:不满0.1G的，按0.1G计算
     function _dataSizeToGWT(uint64 dataSize) internal pure returns(uint256) {
         return (dataSize * 10 ** 18) >> 30;
     }
@@ -147,14 +158,28 @@ contract PublicDataStorage {
     function createPublicData(
         bytes32 dataMixedHash,
         uint64 depositRatio,
-        address publicDataContract,
+        uint256 depositAmount, //希望打入的GWT余额
+        address publicDataContract,//REVIEW:现在的实现简单，但应考虑更简单的导入整个NFT合约的所有Token的情况
         uint256 tokenId
     ) public {
-        PublicData storage publicDataInfo = public_datas[dataMixedHash];
-        require(publicDataInfo.mixedHash == bytes32(0));
+        require(depositRatio >= sysMinDepositRatio, "deposit ratio is too small");
+        require(dataMixedHash != bytes32(0), "data hash is empty");
 
-        publicDataInfo.mixedHash = dataMixedHash;
+        PublicData storage publicDataInfo = public_datas[dataMixedHash];
+        //TODO:这里不要再保存一次mixedHash了，贵
+        require(publicDataInfo.maxDeposit == 0);
+
+        // get data size from data hash
+        uint64 dataSize = getDataSize(dataMixedHash);
+        //TODO: 要区分质押率和最小时长。最小时长是系统参数，质押率depositRatio是用户参数
+        //质押率影响用户SHOW数据所需要冻结的质押
+        //depositAmount = 数据大小*最小时长*质押率，
+        uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysMinPublicDataStorageWeeks;
+        require(depositAmount > minAmount, "deposit amount is too small");
+        publicDataInfo.maxDeposit = depositAmount;
+        //publicDataInfo.mixedHash = dataMixedHash;
         publicDataInfo.sponsor = msg.sender;
+        gwtToken.transferFrom(msg.sender, address(this), depositAmount);
 
         if (publicDataContract == address(0)) {
             publicDataInfo.owner = msg.sender;
@@ -162,6 +187,7 @@ contract PublicDataStorage {
             // token id must be greater than 0
             // 当合约不是IERCPublicDataContract时，是否可以将owner设置为contract地址？
             // 是不是可以认为这是个Ownerable合约？
+            // TODO: 这里要考虑一下Owner的粒度： 合约Owner,Collection Owner,Token Owner
             publicDataInfo.owner = Ownable(publicDataContract).owner();
         } else {
             require(dataMixedHash == IERCPublicDataContract(publicDataContract).tokenDataHash(tokenId));
@@ -169,22 +195,11 @@ contract PublicDataStorage {
             publicDataInfo.tokenId = tokenId;
         }
 
-        // transfer deposit
-        require(depositRatio >= 48);
-
-        // get data size from data hash
-        uint64 dataSize = getDataSize(publicDataInfo.mixedHash);
-        uint256 depositAmount = depositRatio * _dataSizeToGWT(dataSize);
-
-        publicDataInfo.maxDeposit = depositAmount;
-
-        gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-        data_balance[publicDataInfo.mixedHash] += (depositAmount * 8) / 10;
+        data_balance[dataMixedHash] += (depositAmount * 8) / 10;
         uint256 system_reward = depositAmount - ((depositAmount * 8) / 10);
-        system_reward_pool += system_reward;
+        
         _addCycleReward(system_reward);
-
-        public_datas[dataMixedHash] = publicDataInfo;
+        //public_datas[dataMixedHash] = publicDataInfo;
 
         emit PublicDataCreated(dataMixedHash);
         emit SponserChanged(dataMixedHash, address(0), msg.sender);
@@ -201,25 +216,26 @@ contract PublicDataStorage {
 
     function addDeposit(bytes32 dataMixedHash, uint256 depositAmount) public {
         PublicData storage publicDataInfo = public_datas[dataMixedHash];
-        require(publicDataInfo.mixedHash != bytes32(0));
+        require(publicDataInfo.maxDeposit > 0);
         require(publicDataInfo.owner == msg.sender);
 
         // transfer deposit
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-        data_balance[publicDataInfo.mixedHash] += (depositAmount * 8) / 10;
+        //REVIEW:把balance放到publicDataInfo逻辑更单纯?
+        data_balance[dataMixedHash] += (depositAmount * 8) / 10;
 
         uint256 system_reward = depositAmount - ((depositAmount * 8) / 10);
-        system_reward_pool += system_reward;
+        
+       
         _addCycleReward(system_reward);
 
-        if (depositAmount > publicDataInfo.maxDeposit) {
-            publicDataInfo.maxDeposit = depositAmount;
-        }
-
         if (depositAmount > ((publicDataInfo.maxDeposit * 11) / 10)) {
+            publicDataInfo.maxDeposit = depositAmount;
             address oldSponser = publicDataInfo.sponsor;
-            publicDataInfo.sponsor = msg.sender;
-            emit SponserChanged(dataMixedHash, oldSponser, msg.sender);
+            if(oldSponser != msg.sender) {
+                publicDataInfo.sponsor = msg.sender;
+                emit SponserChanged(dataMixedHash, oldSponser, msg.sender);
+            }
         }
     }
 
@@ -227,7 +243,7 @@ contract PublicDataStorage {
         return data_balance[dataMixedHash];
     }
 
-    function pledgeGWT(uint256 amount, bytes32 dataMixedHash) public {
+    function pledgeGwt(uint256 amount, bytes32 dataMixedHash) public {
         gwtToken.transferFrom(msg.sender, address(this), amount);
         supplier_pledge[msg.sender].pledge[dataMixedHash] += amount;
 
@@ -245,6 +261,7 @@ contract PublicDataStorage {
     }
 
     function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
+        //TODO 这个质押保存的结构有点复杂了，可以简化
         uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
         uint256 showReward = data_balance[public_datas[dataMixedHash].mixedHash] / 10;
         return supplierPledge > showDepositRatio * showReward;
@@ -269,11 +286,14 @@ contract PublicDataStorage {
 
     // msg.sender is supplier
     // show_hash = keccak256(abiEncode[sender, dataMixedHash, prev_block_hash, block_number])
+    
     function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata, bytes32 noise) public {
         address supplier = msg.sender;
         require(nonce_block < block.number && block.number - nonce_block < maxNonceBlockDistance);
         require(_validPublicSupplier(supplier, dataMixedHash));
-        // 每个块的每个supplier只能show一次数据
+        
+        // 每个块的每个supplier只能show一次数据 
+        // TODO:这里用this_block_show就好了，不用全保存下来
         require(all_shows[block.number][supplier] == false);
 
         // check block.number meets certain conditions
@@ -289,7 +309,7 @@ contract PublicDataStorage {
 
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
-        dataInfo.score += getDataSize(publicDataInfo.mixedHash);
+        dataInfo.score += getDataSize(dataMixedHash);
 
         // insert supplier into last_showers
         if (dataInfo.shower_index >= 5) {
@@ -297,12 +317,13 @@ contract PublicDataStorage {
         }
         dataInfo.last_showers[dataInfo.shower_index] = supplier;
         dataInfo.shower_index += 1;
-
+        
+        //TODO：计算奖励前先判断用户是否有足够的非冻结抵押余额，Show完后会更新LastShowTime，以及冻结的质押余额
         // 给成功的show一些奖励
-        uint256 reward = data_balance[publicDataInfo.mixedHash] / 10;
+        uint256 reward = data_balance[dataMixedHash] / 10;
         if (reward > 0) {
             gwtToken.transfer(supplier, reward);
-            data_balance[publicDataInfo.mixedHash] -= reward;
+            data_balance[dataMixedHash] -= reward;
             supplier_pledge[supplier].lastShowBlock = block.number;
         }
 
@@ -386,15 +407,17 @@ contract PublicDataStorage {
         }
     }
 
-    function withdraw(uint cycleNumber, bytes32 dataMixedHash) public {
+    function withdrawAward(uint cycleNumber, bytes32 dataMixedHash) public {
         // 判断这次的cycle已经结束
         require(block.number > cycleNumber * blocksPerCycle + startBlock);
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
+        //REVIEW:一次排序并保存的GAS和32次内存排序的成本问题？
         uint256 scoreListRanking = cycleInfo.score_list.getRanking(dataMixedHash);
         require(scoreListRanking > 0);
 
         // 看看是谁来取
+        // REVIEW 这个函数做的事情比较多，建议拆分，或则命名更优雅一些
         uint8 withdrawUser = _getWithdrawUser(dataMixedHash);
 
         require(withdrawUser > 0);
@@ -412,6 +435,6 @@ contract PublicDataStorage {
         dataInfo.withdraw_status |= withdrawUser;
 
 
-        emit Withdraw(dataMixedHash, msg.sender, reward);
+        emit WithdrawAward(dataMixedHash, msg.sender, reward);
     }
 }
