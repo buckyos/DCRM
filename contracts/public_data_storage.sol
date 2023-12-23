@@ -78,10 +78,12 @@ contract PublicDataStorage {
 
     // 合约常量参数
     uint256 constant public blocksPerCycle = 17280;
-    uint256 constant public topRewards = 16;
+    uint256 constant public topRewards = 32;
     uint256 constant public lockAfterShow = 240;    // 成功的SHOW一小时内不允许提现
     uint256 constant public maxNonceBlockDistance = 2;  // 允许的nonce block距离, lockAfterShow + maxNonceBlockDistance要小于256
     uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
+    uint256 constant public showDepositRatio = 3; // SHOW的时候抵押的GWT倍数
+    uint256 constant public totalRewardScore = 1572; // 将rewardScores相加得到的结果
 
     event GWTStacked(address supplier, bytes32 mixedHash, uint256 amount);
     event GWTUnstacked(address supplier, bytes32 mixedHash, uint256 amount);
@@ -94,6 +96,20 @@ contract PublicDataStorage {
     constructor(address _gwtToken) {
         gwtToken = GWTToken(_gwtToken);
         startBlock = block.number;
+    }
+
+    function _getRewardScore(uint256 ranking) internal pure returns(uint256) {
+        uint8[32] memory rewardScores = [
+            240, 180, 150, 120, 100, 80, 60, 50, 40, 
+            35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 
+            24, 23, 22, 21, 20, 19, 18 ,17, 16, 15, 14, 13
+        ];
+
+        if (ranking <= rewardScores.length) {
+            return rewardScores[ranking - 1];
+        } else {
+            return 0;
+        }
     }
 
     function getDataSize(bytes32 dataHash) public pure returns (uint64) {
@@ -231,7 +247,7 @@ contract PublicDataStorage {
     function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
         uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
         uint256 showReward = data_balance[public_datas[dataMixedHash].mixedHash] / 10;
-        return supplierPledge > 2 * showReward;
+        return supplierPledge > showDepositRatio * showReward;
     }
 
     function _verifyData(
@@ -316,8 +332,8 @@ contract PublicDataStorage {
 
         bytes32 minMerkleHash = MerkleProof.processProofCalldata(m_path, keccak256(abi.encodePacked(leafdata[:pos], nonce, leafdata[pos:])));
         if (uint256(minMerkleHash) < uint256(show_datas[challengeTo][dataMixedHash].minHash)) {
-            // 扣除奖励的2倍
-            uint256 reward = show_datas[challengeTo][dataMixedHash].rewardAmount * 2;
+            // 扣除奖励的showDepositRatio倍
+            uint256 reward = show_datas[challengeTo][dataMixedHash].rewardAmount * showDepositRatio;
             supplier_pledge[challengeTo].pledge[dataMixedHash] -= reward;
             gwtToken.transfer(msg.sender, reward);
             emit ChallengeSuccess(msg.sender, challengeTo, show_block_number, dataMixedHash, reward);
@@ -386,10 +402,8 @@ contract PublicDataStorage {
 
         // 计算该得到多少奖励
         uint256 totalReward = cycleInfo.total_award * 8 / 10;
-        // 积分规则我先自己定一个, 参见最顶上的注释
-        uint256 totalScore = (1 + topRewards) * topRewards / 2;
-        uint256 ranking = topRewards - scoreListRanking + 1;
-        uint256 dataReward = totalReward * ranking / totalScore;
+
+        uint256 dataReward = totalReward * _getRewardScore(scoreListRanking) / totalRewardScore;
 
         uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.last_showers.length);
         gwtToken.transfer(msg.sender, reward);
