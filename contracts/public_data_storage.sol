@@ -263,7 +263,7 @@ contract PublicDataStorage {
     function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
         //TODO 这个质押保存的结构有点复杂了，可以简化
         uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
-        uint256 showReward = data_balance[public_datas[dataMixedHash].mixedHash] / 10;
+        uint256 showReward = data_balance[dataMixedHash] / 10;
         return supplierPledge > showDepositRatio * showReward;
     }
 
@@ -343,6 +343,7 @@ contract PublicDataStorage {
     }
 
     // 挑战challengeTo在show_block_number上对dataMixedHash的show
+    // TODO:challenge也可能会被挑战，所以不如简化成showData是上一个showData的挑战。
     function challenge(address challengeTo, bytes32 dataMixedHash, uint256 show_block_number, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) public {
         require(show_block_number == show_datas[challengeTo][dataMixedHash].show_block);
         require(block.number < show_block_number + lockAfterShow);

@@ -43,6 +43,11 @@ DMC上DeFi
 2. 挑战奖励的20%（比如用户通过挑战得到了1000个GWT，基金会会得到200个）
 
 ## 如何得到DMC？
+特别注意的是，在用户看来使用DMC的操作，实际上我们是分成了的两部分的
+1. DMC兑换得到GWT
+2. 质押GWT
+因此需要仔细的考虑产品设计，让用户减少兑换GWT的手续费开销
+
 ### 老矿工
 调用DMC上的销毁合约，填写chainid+地址
 调用 DMC合约的体现方法，得到DMC
@@ -64,7 +69,7 @@ DMC上DeFi
 4. 经常分享自己拥有的NFT的数据Hash，让更多的人来Sponsor或SHOW数据
 
 ### 如何确定PublicData的Owner？
-
+TODO：Improve
 
 ## Sponosr视角的合约调用顺序
 
@@ -74,6 +79,7 @@ DMC上DeFi
 function createPublicData(
     bytes32 dataMixedHash,
     uint64 depositRatio, //默认为 64，文件大小为1G，矿工需要锁定1*depositRatio*24的质押币 (SHOW相当于用户承诺保存24周)
+    uint256 depositAmount, //希望打入的GWT余额
     address publicDataContract,
     uint256 tokenId
 )
@@ -97,6 +103,8 @@ addDeposit(bytes32 dataMixedHash, uint256 depositAmount)
 根据自己的空间进行初始质押->选择1个合适的数据->提交存储证明->等待挑战超时->提权奖励->解除质押
 根据目标数据的余额准备初始质押->选择1个合适的数据->提交存储证明->等待挑战超时->提权奖励->解除质押
 
+
+
 ### 成为普通公共数据供应商
 1. 得到DMC：Mint/购买 (DeFi)
 2. 按1：210兑换GWT并全部质押
@@ -110,28 +118,41 @@ addDeposit(bytes32 dataMixedHash, uint256 depositAmount)
 ```
 GWT = 平均余额 * 30，比如数据的平均余额为10000GWT，那么就需要准备300000 的DMC （约1500 DMC）
 ```
+调用 pledgeGWT，得到有效的存储空间。根据现在的共识，需要额外增加约1500DMC
 
 ### 质押 SHOW 数据并得到奖励（手续费低，质押币需求高）
 这里的质押是指根据SHOW收益决定的质押，和数据的Balance有关
-要注意冻结余额
-去掉PoW，因此只需要提交 m,hash
-一旦SHOW后，就会增加数据的分数
 
+调用函数：
+```
+//去掉PoW，因此只需要提交 m, path_m, m_leaf_data
+function showDataEx(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) 
+```
+在Show后会立刻得到奖励，并增加数据的分数。但是需要等待一段时间才能解除质押
+现在对质押的实现太消耗GAS了，可以更简单一点。
 
 ### 免质押SHOW数据 （手续费高，质押币需求低）
-这里的质押是根据SHOW 数据大小的一般性质押，和Balance有关。由系统决定，目前对公共数据的质押率要求是创建数据时决定的，默认最小值是48倍GWT）
-需要在提现操作里增加数据的分数
+这里的质押是根据SHOW 数据大小的一般性质押，由系统决定而与Balance无关，目前对公共数据的质押率要求是创建数据时决定的，默认最小值是64倍）
 
+调用函数
+```
+//去掉PoW，因此只需要提交 m, path_m, m_leaf_data
+function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) 
+```
 #### 提现Show数据
+TODO：需要增加实现，针对showData的Index进行提现
+在提现操作里增加数据的分数
 
-8
 ### 解除质押
 非冻结部分可以随时接触质押
-冻结部分要看冻结时间，超过冻结时间可以接触质押
+冻结部分要看冻结时间，超过冻结时间可以解除质押。这样每次调用ShowData、ShowDataEx后，只需要简单的增加冻结时间就好了。
 
 ### 通过挑战赚钱
 自己的SHOW操作如果没有在正确的区块上链，且系统已经有了一个SHOW记录，则自动变为挑战
 挑战成功替换SHOW记录（本次替换不会增加数据的积分），并等待Timeout后可以提现自己的挑战奖励（比原奖励略少）。
+```
+function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) 
+```
 
 
 ## Award计算
