@@ -11,7 +11,9 @@ using SortedScoreList for SortedScoreList.List;
 interface IERCPublicDataContract {
     //return the owner of the data
     function getDataOwner(bytes32 dataHash) external view returns (address);
+}
 
+interface IERC721VerfiyDataHash{
     //return token data hash
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
 }
@@ -188,9 +190,10 @@ contract PublicDataStorage {
             // 当合约不是IERCPublicDataContract时，是否可以将owner设置为contract地址？
             // 是不是可以认为这是个Ownerable合约？
             // TODO: 这里要考虑一下Owner的粒度： 合约Owner,Collection Owner,Token Owner
-            publicDataInfo.owner = Ownable(publicDataContract).owner();
+            
+            //publicDataInfo.nftContract = IERC721VerfiyDataHash(publicDataContract);
         } else {
-            require(dataMixedHash == IERCPublicDataContract(publicDataContract).tokenDataHash(tokenId));
+            require(dataMixedHash == IERC721VerfiyDataHash(publicDataContract).tokenDataHash(tokenId));
             publicDataInfo.nftContract = publicDataContract;
             publicDataInfo.tokenId = tokenId;
         }

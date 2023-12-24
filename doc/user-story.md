@@ -69,7 +69,13 @@ DMC上DeFi
 4. 经常分享自己拥有的NFT的数据Hash，让更多的人来Sponsor或SHOW数据
 
 ### 如何确定PublicData的Owner？
-TODO：Improve
+1. 固定Owenr,Sponsor就是Owner
+2. 指定NFT合约，但未指定Index，这说明指该合约有查询数据Owner的方法。目前可以配置的就是我们的NFT Bridge合约，这种情况下Owner就是NFT Bridge合约的Owner
+3. 指定NFT合约和Index,是指该数据的Owner就是特定NFT合约和Index的Owner。这种指定方法是我们最推荐的，可以和现在NFT生态很好的结合。但为了提高可信性，我们要求建立这种关系是可验证的。
+
+#### 公共数据与NFT Owner的可验证连接
+1. NFT合约本身实现了ERCXXXPublicData接口 （新NFT合约）
+2. 官方的NFT Bridge合约实现了ERCXXXPublicData接口，并可查询到对应NFT合约 （已存NFT合约）
 
 ## Sponosr视角的合约调用顺序
 
