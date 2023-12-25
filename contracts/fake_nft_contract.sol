@@ -2,14 +2,11 @@
 pragma solidity ^0.8.0;
 
 import "./public_data_storage.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract FakeNFTContract is IERCPublicDataContract, Ownable {
+contract FakeNFTContract is IERCPublicDataContract, IERC721VerfiyDataHash {
     mapping (uint256 => bytes32) public tokenDataHashes;
     mapping (bytes32 => address) public dataOwners;
-    
-    constructor() Ownable(msg.sender) {
-    }
+
 
     function addData(
         bytes32 dataHash,

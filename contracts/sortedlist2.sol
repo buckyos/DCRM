@@ -1,48 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-library SortedScoreList {
+library SortedScoreList2 {
     struct List {
         uint256 max_length;
         bytes32 head;
         mapping(bytes32 => uint256) scores;
         mapping(bytes32 => bytes32) sorted;
-    }
-
-    function _ensureSize(List storage self) private {
-        uint32 cur_length = 0;
-        bytes32 current = self.head;
-        bytes32 prev = current;
-        while (cur_length < self.max_length && current != bytes32(0)) {
-            cur_length += 1;
-            prev = current;
-            current = self.sorted[current];
-        }
-
-        // 这里其实只会去掉最后一个
-        if (current != bytes32(0)) {
-            self.sorted[prev] = bytes32(0);
-            delete self.scores[current];
-            delete self.sorted[current];
-        }
-    }
-
-    function _ensureSize2(List storage self, bytes32[] memory sortedArray) private {
-        uint32 cur_length = 0;
-        bytes32 current = self.head;
-        bytes32 prev = current;
-        while (cur_length < self.max_length && current != bytes32(0)) {
-            cur_length += 1;
-            prev = current;
-            current = self.sorted[current];
-        }
-
-        // 这里其实只会去掉最后一个
-        if (current != bytes32(0)) {
-            self.sorted[prev] = bytes32(0);
-            delete self.scores[current];
-            delete self.sorted[current];
-        }
     }
 
     function _makeSortedArray(List storage self, bytes32[] memory sortedList) private returns (bool listFull) {
@@ -57,28 +21,7 @@ library SortedScoreList {
         return cur == self.max_length;
     }
 
-    function _deleteScore(List storage self, bytes32 mixedHash) private  {
-        if (self.head == mixedHash) {
-            self.head = self.sorted[mixedHash];
-            delete self.sorted[mixedHash];
-            delete self.scores[mixedHash];
-        } else {
-            bytes32 current = self.head;
-            bytes32 next = self.sorted[current];
-            while (next != bytes32(0)) {
-                if (next == mixedHash) {
-                    self.sorted[current] = self.sorted[next];
-                    delete self.sorted[next];
-                    delete self.scores[next];
-                    return;
-                }
-                current = next;
-                next = self.sorted[current];
-            }
-        }
-    }
-
-    function _deleteScore2(List storage self, bytes32[] memory sortedKeyArray, bytes32 mixedHash) private returns (bool) {
+    function _deleteScore(List storage self, bytes32[] memory sortedKeyArray, bytes32 mixedHash) private returns (bool) {
         uint i = 0;
         bool deleted = false;
         for (; i < sortedKeyArray.length; i++) {
@@ -108,41 +51,6 @@ library SortedScoreList {
             return;
         }
 
-        // 由于max_length有限，这里做两次遍历也并不过多消耗性能
-        _deleteScore(self, mixedHash);
-
-        bytes32 currect = self.head;
-        bytes32 prev = bytes32(0);
-        uint cur_index = 0;
-        while (true) {
-            // 同score的数据先到先占，这里利用了score的默认值为0的特性，这个循环一定会结束
-            if (self.scores[currect] < score) {
-                // TODO: 如果插入的数据是最后一个的话，会变成先插入再删除，这里可以优化
-                if (prev != bytes32(0)) {
-                    self.sorted[prev] = mixedHash;
-                }
-                self.sorted[mixedHash] = currect;
-                self.scores[mixedHash] = score;
-                break;
-            }
-            cur_index += 1;
-            prev = currect;
-            currect = self.sorted[currect];
-        }
-
-        if (cur_index == 0) {
-            self.head = mixedHash;
-        }
-
-        // 这里认为，往存储里写一个bytes32 end的值，比遍历要贵
-        _ensureSize(self);
-    }
-
-    function updateScore2(List storage self, bytes32 mixedHash, uint256 score) public {
-        if (self.scores[mixedHash] == score) {
-            return;
-        }
-
         bytes32[] memory sortedKeyArray = new bytes32[](self.max_length);
         bool fullList = _makeSortedArray(self, sortedKeyArray);
 
@@ -152,7 +60,7 @@ library SortedScoreList {
         }
 
         // 由于max_length有限，这里做两次遍历也并不过多消耗性能
-        bool deleted = _deleteScore2(self, sortedKeyArray, mixedHash);
+        bool deleted = _deleteScore(self, sortedKeyArray, mixedHash);
 
         for (uint i = 0; i < sortedKeyArray.length; i++) {
             if (sortedKeyArray[i] == bytes32(uint256(1))) {

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 using SortedScoreList for SortedScoreList.List;
@@ -19,28 +18,26 @@ interface IERC721VerfiyDataHash{
 }
 // Review: 考虑有一些链的出块时间不确定,使用区块间隔要谨慎，可以用区块的时间戳
 
+
+// mixedDataHash: 2bit hash algorithm + 62bit data size + 192bit data hash
+// 2bit hash algorithm: 00: keccak256, 01: sha256
+
 /**
  * 有关奖励逻辑：
  * 每个周期的奖励 = 上个周期的奖励 * 0.2 + 这个周期的所有赞助 * 0.2
  * 因此，在每次收入奖励时，更新本周期的奖励额度
  * 当本周期奖励额度为0时，以上个周期的奖励*0.2起始
  * 可能有精度损失？
- * 
- * 
- */
-
-/**
- * 积分规则是什么样的？我先定一个，取top N，第一名积分N，第二名N-1，一直到1为止
  */
 
 contract PublicDataStorage {
     struct PublicData {
-        //bytes32 mixedHash;
         address owner;
         address sponsor;
         address nftContract;
         uint256 tokenId;
         uint256 maxDeposit;
+        uint256 data_balance;
     }
 
     struct SupplierInfo {
@@ -54,7 +51,6 @@ contract PublicDataStorage {
 
     mapping(bytes32 => PublicData) public_datas;
     
-    mapping(bytes32 => uint256) data_balance;
     // 这里相当于记得是supplier的show记录，共挑战用
     struct ShowData {
         uint256 nonce_block;
@@ -81,7 +77,9 @@ contract PublicDataStorage {
     mapping(uint256 => CycleInfo) cycle_infos;
 
     uint256 startBlock;
-    uint256 sysBalance = 0;
+    // REVIEW by weiqiushi: 我们其实不需要记录系统的总奖励，每个周期有记录就可以了，提现的时候也是靠cycle reward来计算的
+    //uint256 sysBalance = 0;
+    uint256 currectCycle;
 
     // 合约常量参数
     uint256 sysMinDepositRatio = 64;
@@ -93,10 +91,12 @@ contract PublicDataStorage {
     uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
     uint256 constant public showDepositRatio = 3; // SHOW的时候抵押的GWT倍数
     uint256 constant public totalRewardScore = 1572; // 将rewardScores相加得到的结果
+    uint64 constant public sysMinDataSize = 1 << 27; // dataSize换算GWT时，最小值为100M
 
     event GWTStacked(address supplier, bytes32 mixedHash, uint256 amount);
     event GWTUnstacked(address supplier, bytes32 mixedHash, uint256 amount);
     event PublicDataCreated(bytes32 mixedHash);
+    event DepositData(address depositer, bytes32 mixedHash, uint256 balance, uint256 reward);
     event SponserChanged(bytes32 mixedHash, address oldSponser, address newSponser);
     event DataShowed(bytes32 mixedHash, address shower, uint256 score);
     event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
@@ -105,6 +105,7 @@ contract PublicDataStorage {
     constructor(address _gwtToken) {
         gwtToken = GWTToken(_gwtToken);
         startBlock = block.number;
+        currectCycle = 0;
     }
 
     function _getRewardScore(uint256 ranking) internal pure returns(uint256) {
@@ -122,7 +123,7 @@ contract PublicDataStorage {
     }
 
     function getDataSize(bytes32 dataHash) public pure returns (uint64) {
-        return uint64(uint256(dataHash) >> 192);
+        return uint64(uint256(dataHash) >> 192) | uint64((1 << 62) - 1);
     }
 
     function _verifyBlockNumber(bytes32 dataMixedHash, uint256 blockNumber) internal pure returns(bool) {
@@ -138,23 +139,34 @@ contract PublicDataStorage {
         return cycleNumber;
     }
 
-    //REVIEW:至在增加余额的时候更新周期会不会有潜在的bug? 比如存在周期空洞
+    // 通过记录一个最后的周期来解决周期之间可能有空洞的问题
     function _addCycleReward(uint256 amount) private {
         uint256 cycleNumber = _cycleNumber();
         CycleInfo storage cycleInfo = cycle_infos[cycleNumber];
         if (cycleInfo.total_award == 0) {
-            uint256 lastCycleReward = cycle_infos[cycleNumber - 1].total_award;
+            uint256 lastCycleReward = cycle_infos[currectCycle].total_award;
             cycleInfo.total_award = (lastCycleReward * 3 / 20);
-            sysBalance +=  (lastCycleReward / 20);
+            // REVIEW by weiqiushi: 这里只是记录cycle之间的奖励转移，系统奖池里的资金没有真正的变化
+            // sysBalance += (lastCycleReward / 20);
             cycle_infos[cycleNumber - 1].total_award = lastCycleReward * 4 / 5;
         }
         cycleInfo.total_award += amount;
+
+        if (currectCycle != cycleNumber) {
+            // 进入了一个新的周期
+            currectCycle = cycleNumber;
+        }
+        
     }
 
     // 计算这些空间对应多少GWT，单位是wei
-    //TODO:不满0.1G的，按0.1G计算
+    // 不满128MB的按照128MB计算
     function _dataSizeToGWT(uint64 dataSize) internal pure returns(uint256) {
-        return (dataSize * 10 ** 18) >> 30;
+        uint64 fixedDataSize = dataSize;
+        if (fixedDataSize < sysMinDataSize) {
+            fixedDataSize = sysMinDataSize;
+        }
+        return (fixedDataSize * 10 ** 18) >> 30;
     }
 
     function createPublicData(
@@ -168,18 +180,16 @@ contract PublicDataStorage {
         require(dataMixedHash != bytes32(0), "data hash is empty");
 
         PublicData storage publicDataInfo = public_datas[dataMixedHash];
-        //TODO:这里不要再保存一次mixedHash了，贵
         require(publicDataInfo.maxDeposit == 0);
 
         // get data size from data hash
         uint64 dataSize = getDataSize(dataMixedHash);
-        //TODO: 要区分质押率和最小时长。最小时长是系统参数，质押率depositRatio是用户参数
-        //质押率影响用户SHOW数据所需要冻结的质押
-        //depositAmount = 数据大小*最小时长*质押率，
+        // 区分质押率和最小时长。最小时长是系统参数，质押率depositRatio是用户参数
+        // 质押率影响用户SHOW数据所需要冻结的质押
+        // minAmount = 数据大小*最小时长*质押率，
         uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysMinPublicDataStorageWeeks;
-        require(depositAmount > minAmount, "deposit amount is too small");
+        require(depositAmount >= minAmount, "deposit amount is too small");
         publicDataInfo.maxDeposit = depositAmount;
-        //publicDataInfo.mixedHash = dataMixedHash;
         publicDataInfo.sponsor = msg.sender;
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
 
@@ -187,25 +197,23 @@ contract PublicDataStorage {
             publicDataInfo.owner = msg.sender;
         } else if (tokenId == 0) {
             // token id must be greater than 0
-            // 当合约不是IERCPublicDataContract时，是否可以将owner设置为contract地址？
-            // 是不是可以认为这是个Ownerable合约？
             // TODO: 这里要考虑一下Owner的粒度： 合约Owner,Collection Owner,Token Owner
-            
-            //publicDataInfo.nftContract = IERC721VerfiyDataHash(publicDataContract);
+            publicDataInfo.nftContract = publicDataContract;
         } else {
             require(dataMixedHash == IERC721VerfiyDataHash(publicDataContract).tokenDataHash(tokenId));
             publicDataInfo.nftContract = publicDataContract;
             publicDataInfo.tokenId = tokenId;
         }
 
-        data_balance[dataMixedHash] += (depositAmount * 8) / 10;
-        uint256 system_reward = depositAmount - ((depositAmount * 8) / 10);
-        
+        uint256 balance_add = (depositAmount * 8) / 10;
+        publicDataInfo.data_balance += balance_add;
+        uint256 system_reward = depositAmount - balance_add;
+
         _addCycleReward(system_reward);
-        //public_datas[dataMixedHash] = publicDataInfo;
 
         emit PublicDataCreated(dataMixedHash);
         emit SponserChanged(dataMixedHash, address(0), msg.sender);
+        emit DepositData(msg.sender, dataMixedHash, balance_add, system_reward);
     }
 
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
@@ -224,12 +232,11 @@ contract PublicDataStorage {
 
         // transfer deposit
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-        //REVIEW:把balance放到publicDataInfo逻辑更单纯?
-        data_balance[dataMixedHash] += (depositAmount * 8) / 10;
 
-        uint256 system_reward = depositAmount - ((depositAmount * 8) / 10);
-        
-       
+        uint256 balance_add = (depositAmount * 8) / 10;
+        publicDataInfo.data_balance += balance_add;
+
+        uint256 system_reward = depositAmount - balance_add;
         _addCycleReward(system_reward);
 
         if (depositAmount > ((publicDataInfo.maxDeposit * 11) / 10)) {
@@ -240,10 +247,12 @@ contract PublicDataStorage {
                 emit SponserChanged(dataMixedHash, oldSponser, msg.sender);
             }
         }
+
+        emit DepositData(msg.sender, dataMixedHash, balance_add, system_reward);
     }
 
     function dataBalance(bytes32 dataMixedHash) public view returns(uint256) {
-        return data_balance[dataMixedHash];
+        return public_datas[dataMixedHash].data_balance;
     }
 
     function pledgeGwt(uint256 amount, bytes32 dataMixedHash) public {
@@ -265,8 +274,9 @@ contract PublicDataStorage {
 
     function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
         //TODO 这个质押保存的结构有点复杂了，可以简化
+        // REVIEW by weiqiushi: 因为质押是针对数据的，所以才有两层索引。否则一个supplier可以通过质押一份空间来SHOW多份数据
         uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
-        uint256 showReward = data_balance[dataMixedHash] / 10;
+        uint256 showReward = public_datas[dataMixedHash].data_balance / 10;
         return supplierPledge > showDepositRatio * showReward;
     }
 
@@ -297,6 +307,7 @@ contract PublicDataStorage {
         
         // 每个块的每个supplier只能show一次数据 
         // TODO:这里用this_block_show就好了，不用全保存下来
+        // by weiqiushi: 什么是this_block_show？
         require(all_shows[block.number][supplier] == false);
 
         // check block.number meets certain conditions
@@ -322,11 +333,12 @@ contract PublicDataStorage {
         dataInfo.shower_index += 1;
         
         //TODO：计算奖励前先判断用户是否有足够的非冻结抵押余额，Show完后会更新LastShowTime，以及冻结的质押余额
+        // REVIEW by weiqiushi: 用户的质押余额会分冻结和非冻结？文档里没有这样的逻辑
         // 给成功的show一些奖励
-        uint256 reward = data_balance[dataMixedHash] / 10;
+        uint256 reward = publicDataInfo.data_balance / 10;
         if (reward > 0) {
             gwtToken.transfer(supplier, reward);
-            data_balance[dataMixedHash] -= reward;
+            publicDataInfo.data_balance -= reward;
             supplier_pledge[supplier].lastShowBlock = block.number;
         }
 
