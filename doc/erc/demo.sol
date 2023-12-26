@@ -66,7 +66,7 @@ contract PublicStorageProofDemo {
         }
 
         require(!is_new_show && last_proof.nonce_block_high == nonce_block_high, "nonce_block_high not match");
-        (bytes32 root_hash,bytes32 pow_hash) = _verifyDataProof(dataMixedHash,nonce_block_high,index_m,m_path,leafdata,0);
+        (bytes32 root_hash,bytes32 pow_hash) = _verifyDataProof(dataMixedHash,nonce_block_high,index_m,m_path,leafdata,noise);
         // 判断新的root_hash是否满足pow难度,判断方法为后N个bits是否为0
         require(uint256(pow_hash) & (1 << POW_DIFFICULTY - 1) == 0, "pow difficulty not match");
         
@@ -85,6 +85,10 @@ contract PublicStorageProofDemo {
             }
         }
     }
+
+    function lengthFromMixedHash(bytes32 dataMixedHash) public pure returns (uint64) {
+        return uint64(uint256(dataMixedHash) >> 192 & (1 << 62 - 1));
+    }
     
     function _verifyDataProof(bytes32 dataMixedHash,uint256 nonce_block_high, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata,bytes32 noise) private view returns(bytes32,bytes32) {
         require(nonce_block_high < block.number, "invalid nonce_block_high");
@@ -94,6 +98,7 @@ contract PublicStorageProofDemo {
         uint16 pos = uint16(uint256(nonce) % 960 + 32);
 
         //REVIEW: 应该先验证index落在MixedHash包含的长度范围内
+        require(index < lengthFromMixedHash(dataMixedHash) >> 10 + 1, "invalid index");
 
         //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
         // hash的头2bits表示hash算法，00 = sha256, 10 = keccak256
@@ -153,15 +158,24 @@ contract PublicStorageProofDemo {
         }
     }
 
+    function _efficientKeccak256(bytes16 a, bytes16 b) private pure returns (bytes32 value) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            mstore(0x00, a)
+            mstore(0x10, b)
+            value := keccak256(0x00, 0x20)
+        }
+    }
+
     function _merkleRootWithKeccak256(bytes16[] calldata proof, uint32 leaf_index,bytes16 leaf_hash) internal pure returns (bytes32) {
         bytes16 currentHash = leaf_hash;
         bytes32 computedHash = 0;
         for (uint32 i = 0; i < proof.length; i++) {
             if (leaf_index % 2 == 0) {
                 //sha256(bytes.concat(a, b))?
-                computedHash = keccak256(abi.encodePacked(currentHash, proof[i]));
+                computedHash = _efficientKeccak256(currentHash, proof[i]);
             } else {
-                computedHash = keccak256(abi.encodePacked(proof[i], currentHash));
+                computedHash = _efficientKeccak256(proof[i], currentHash);
             }
             currentHash = bytes16(computedHash);
             require(leaf_index >= 2, "invalid leaf_index");
@@ -179,9 +193,9 @@ contract PublicStorageProofDemo {
         for (uint32 i = 0; i < proof.length; i++) {
             if (leaf_index % 2 == 0) {
                 //sha256(bytes.concat(a, b))?
-                computedHash = sha256(abi.encodePacked(currentHash, proof[i]));
+                computedHash = sha256(bytes.concat(currentHash, proof[i]));
             } else {
-                computedHash = sha256(abi.encodePacked(proof[i], currentHash));
+                computedHash = sha256(bytes.concat(proof[i], currentHash));
             }
             currentHash = bytes16(computedHash);
             require(leaf_index >= 2, "invalid leaf_index");
