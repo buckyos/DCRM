@@ -141,18 +141,10 @@ interface IERC721VerfiyDataHash{
   TODO: Remove this comment before submitting
 -->
 
-No backward compatibility issues found.
+1. 虽然存储证明的设计是算法性的，架构无关的。但现在的设计考虑了能在主流的L1上实现
+2. 使用HashType来兼容现有的L1，并未未来的扩展留出空间
+3. 目前HashType预留了4种，已经使用了两种。如下表：
 
-## Test Cases
-
-<!--
-  This section is optional for non-Core EIPs.
-
-  The Test Cases section should include expected input/output pairs, but may include a succinct set of executable tests. It should not include project build files. No new requirements may be be introduced here (meaning an implementation following only the Specification section should pass all tests here.)
-  If the test suite is too large to reasonably be included inline, then consider adding it as one or more files in `../assets/eip-####/`. External links will not be allowed
-
-  TODO: Remove this comment before submitting
--->
 
 ## Reference Implementation
 

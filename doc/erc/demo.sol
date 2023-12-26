@@ -49,7 +49,6 @@ contract PublicStorageProofDemo {
         }
     }
 
-
     function showStorageProofWihtPoW(bytes32 dataMixedHash, uint256 nonce_block_high,uint32 index_m, bytes16[] calldata m_path, bytes calldata leafdata,bytes32 noise) public {
         StoargeProof storage last_proof = show_datas[dataMixedHash];
         // 如果已经存在，判断区块高度差，决定这是一个新的挑战还是对旧的挑战的更新
@@ -95,7 +94,6 @@ contract PublicStorageProofDemo {
         require(block.number - nonce_block_high < 256, "nonce block too old");
 
         bytes32 nonce = blockhash(nonce_block_high);
-        uint16 pos = uint16(uint256(nonce) % 960 + 32);
 
         //REVIEW: 应该先验证index落在MixedHash包含的长度范围内
         require(index < lengthFromMixedHash(dataMixedHash) >> 10 + 1, "invalid index");
@@ -118,18 +116,18 @@ contract PublicStorageProofDemo {
         // 只比较后192位
         require(dataHash & bytes32(uint256(1 << 192 - 1)) == dataMixedHash & bytes32(uint256(1 << 192 - 1)), "mixhash mismatch");
 
-        //计算在leaf_data中插入nonce,noise后的root_hash
+        //REVIEW:似乎不需要计算插入位置，只是简单的在Leaf的数据后部和头部插入，也足够满足我们的设计目的了？
         bytes memory new_leafdata;
         if(noise != 0) {
             //Enable PoW
-            new_leafdata = bytes.concat(leafdata[:pos], nonce,leafdata[pos+32:]);
+            new_leafdata = bytes.concat(leafdata, nonce);
             bytes32 new_root_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata));
-            new_leafdata = bytes.concat(leafdata[:pos-32],noise, nonce, leafdata[pos+32:]);
 
+            new_leafdata = bytes.concat(noise, leafdata, nonce);
             return (new_root_hash,_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)));
         } else {
             //Disable PoW
-            new_leafdata = bytes.concat(leafdata[:pos], nonce, leafdata[pos+32:]);
+            new_leafdata = bytes.concat(leafdata, nonce);
             return (_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)),0);
         }
     }
