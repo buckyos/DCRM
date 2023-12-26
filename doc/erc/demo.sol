@@ -117,14 +117,14 @@ contract PublicStorageProofDemo {
         bytes memory new_leafdata;
         if(noise != 0) {
             //Enable PoW
-            new_leafdata = bytes.concat(leafdata[:pos], nonce);
+            new_leafdata = bytes.concat(leafdata[:pos], nonce,leafdata[pos+32:]);
             bytes32 new_root_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata));
-            new_leafdata = bytes.concat(leafdata[:pos], nonce, noise, leafdata[pos:]);
+            new_leafdata = bytes.concat(leafdata[:pos-32],noise, nonce, leafdata[pos+32:]);
 
             return (new_root_hash,_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)));
         } else {
             //Disable PoW
-            new_leafdata = bytes.concat(leafdata[:pos], nonce);
+            new_leafdata = bytes.concat(leafdata[:pos], nonce, leafdata[pos+32:]);
             return (_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)),0);
         }
     }
