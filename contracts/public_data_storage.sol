@@ -38,27 +38,26 @@ contract PublicDataStorage {
         uint256 tokenId;
         uint256 maxDeposit;
         uint256 data_balance;
+
+        uint256 nonce_block_high;
+        uint256 proof_block;
+        bytes32 proof_result;
+        address prover;
     }
 
     struct SupplierInfo {
-        mapping(bytes32 => uint256) pledge;
+        uint256 avalibleBalance;
+        uint256 lockedBalance;
+        uint256 unlockBlock;
         uint256 lastShowBlock;
     }
 
     GWTToken public gwtToken;// Gb per Week Token
 
-    mapping(address => SupplierInfo) supplier_pledge;
+    mapping(address => SupplierInfo) supplier_infos;
 
     mapping(bytes32 => PublicData) public_datas;
     
-    // 这里相当于记得是supplier的show记录，共挑战用
-    struct ShowData {
-        uint256 nonce_block;
-        uint256 show_block;
-        uint256 rewardAmount;
-        bytes32 minHash;
-    }
-    mapping(address => mapping(bytes32 => ShowData)) show_datas;
     mapping(uint256 => mapping(address => bool)) all_shows;
 
     struct CycleDataInfo {
@@ -77,28 +76,31 @@ contract PublicDataStorage {
     mapping(uint256 => CycleInfo) cycle_infos;
 
     uint256 startBlock;
-    // REVIEW by weiqiushi: 我们其实不需要记录系统的总奖励，每个周期有记录就可以了，提现的时候也是靠cycle reward来计算的
-    //uint256 sysBalance = 0;
     uint256 currectCycle;
 
     // 合约常量参数
     uint256 sysMinDepositRatio = 64;
     uint256 sysMinPublicDataStorageWeeks = 96;
+    uint256 sysMinLockWeeks = 24;
     uint256 constant public blocksPerCycle = 17280;
     uint256 constant public topRewards = 32;
     uint256 constant public lockAfterShow = 240;    // 成功的SHOW一小时内不允许提现
+    uint256 constant public sysConfigShowTimeout = 720; // SHOW3小时之内允许挑战
     uint256 constant public maxNonceBlockDistance = 2;  // 允许的nonce block距离, lockAfterShow + maxNonceBlockDistance要小于256
     uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
     uint256 constant public showDepositRatio = 3; // SHOW的时候抵押的GWT倍数
     uint256 constant public totalRewardScore = 1572; // 将rewardScores相加得到的结果
-    uint64 constant public sysMinDataSize = 1 << 27; // dataSize换算GWT时，最小值为100M
+    uint64 constant public sysMinDataSize = 1 << 27; // dataSize换算GWT时，最小值为128M
 
-    event GWTStacked(address supplier, bytes32 mixedHash, uint256 amount);
-    event GWTUnstacked(address supplier, bytes32 mixedHash, uint256 amount);
+    event SupplierBalanceChanged(address supplier, uint256 avalibleBalance, uint256 lockedBalance);
+    event GWTStacked(address supplier, uint256 amount);
+    event GWTUnstacked(address supplier, uint256 amount);
     event PublicDataCreated(bytes32 mixedHash);
     event DepositData(address depositer, bytes32 mixedHash, uint256 balance, uint256 reward);
-    event SponserChanged(bytes32 mixedHash, address oldSponser, address newSponser);
-    event DataShowed(bytes32 mixedHash, address shower, uint256 score);
+    event SponsorChanged(bytes32 mixedHash, address oldSponser, address newSponser);
+    event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
+    event SupplierPubished(address supplier, bytes32 mixedHash, uint256 amount);
+    event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block_high, uint32 index_m, bytes32 proof_result);
     event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
     event ChallengeSuccess(address challenger, address challenged, uint256 show_block_number, bytes32 mixedHash, uint256 amount);
 
@@ -146,8 +148,6 @@ contract PublicDataStorage {
         if (cycleInfo.total_award == 0) {
             uint256 lastCycleReward = cycle_infos[currectCycle].total_award;
             cycleInfo.total_award = (lastCycleReward * 3 / 20);
-            // REVIEW by weiqiushi: 这里只是记录cycle之间的奖励转移，系统奖池里的资金没有真正的变化
-            // sysBalance += (lastCycleReward / 20);
             cycle_infos[cycleNumber - 1].total_award = lastCycleReward * 4 / 5;
         }
         cycleInfo.total_award += amount;
@@ -212,7 +212,7 @@ contract PublicDataStorage {
         _addCycleReward(system_reward);
 
         emit PublicDataCreated(dataMixedHash);
-        emit SponserChanged(dataMixedHash, address(0), msg.sender);
+        emit SponsorChanged(dataMixedHash, address(0), msg.sender);
         emit DepositData(msg.sender, dataMixedHash, balance_add, system_reward);
     }
 
@@ -241,10 +241,10 @@ contract PublicDataStorage {
 
         if (depositAmount > ((publicDataInfo.maxDeposit * 11) / 10)) {
             publicDataInfo.maxDeposit = depositAmount;
-            address oldSponser = publicDataInfo.sponsor;
-            if(oldSponser != msg.sender) {
+            address oldSponsor = publicDataInfo.sponsor;
+            if(oldSponsor != msg.sender) {
                 publicDataInfo.sponsor = msg.sender;
-                emit SponserChanged(dataMixedHash, oldSponser, msg.sender);
+                emit SponsorChanged(dataMixedHash, oldSponsor, msg.sender);
             }
         }
 
@@ -255,126 +255,263 @@ contract PublicDataStorage {
         return public_datas[dataMixedHash].data_balance;
     }
 
-    function pledgeGwt(uint256 amount, bytes32 dataMixedHash) public {
+    function _adjustSupplierBalance(address supplier) internal {
+        SupplierInfo storage supplierInfo = supplier_infos[supplier];
+        if (supplierInfo.unlockBlock < block.number) {
+            supplierInfo.avalibleBalance += supplierInfo.lockedBalance;
+            supplierInfo.lockedBalance = 0;
+        }
+    }
+
+    function pledgeGwt(uint256 amount) public {
         gwtToken.transferFrom(msg.sender, address(this), amount);
-        supplier_pledge[msg.sender].pledge[dataMixedHash] += amount;
+        supplier_infos[msg.sender].avalibleBalance += amount;
 
-        emit GWTStacked(msg.sender, dataMixedHash, amount);
+        emit SupplierBalanceChanged(msg.sender, supplier_infos[msg.sender].avalibleBalance, supplier_infos[msg.sender].lockedBalance);
     }
 
-    function unstakeGWT(uint256 amount, bytes32 dataMixedHash) public {
-        // 如果没SHOW过的话，lastShowBlock为0，可以提取
-        require(block.number > supplier_pledge[msg.sender].lastShowBlock + lockAfterShow);
-        require(supplier_pledge[msg.sender].pledge[dataMixedHash] >= amount);
+    function unstakeGWT(uint256 amount) public {
+        // 如果用户的锁定余额可释放，这里会直接释放掉
+        _adjustSupplierBalance(msg.sender);
+        SupplierInfo storage supplierInfo = supplier_infos[msg.sender];
+        require(amount <= supplierInfo.avalibleBalance, "insufficient balance");
+        supplierInfo.avalibleBalance -= amount;
         gwtToken.transfer(msg.sender, amount);
-        supplier_pledge[msg.sender].pledge[dataMixedHash] -= amount;
-
-        emit GWTUnstacked(msg.sender, dataMixedHash, amount);
+        emit SupplierBalanceChanged(msg.sender, supplierInfo.avalibleBalance, supplierInfo.lockedBalance);
     }
 
-    function _validPublicSupplier(address supplierAddress, bytes32 dataMixedHash) internal returns(bool) {
-        //TODO 这个质押保存的结构有点复杂了，可以简化
-        // REVIEW by weiqiushi: 因为质押是针对数据的，所以才有两层索引。否则一个supplier可以通过质押一份空间来SHOW多份数据
-        uint256 supplierPledge = supplier_pledge[supplierAddress].pledge[dataMixedHash];
-        uint256 showReward = public_datas[dataMixedHash].data_balance / 10;
-        return supplierPledge > showDepositRatio * showReward;
+    function _getLockAmount(bytes32 dataMixedHash) internal view returns(uint256) {
+        uint64 dataSize = getDataSize(dataMixedHash);
+        return _dataSizeToGWT(dataSize) * sysMinDepositRatio * sysMinLockWeeks;
     }
 
-    function _verifyData(
-        bytes32 nonce,
-        uint256 pos,
-        uint32 index,
-        bytes32[] calldata m_path,
-        bytes calldata leafdata,
-        bytes32 noise
-    ) internal returns(bool) {
-        // TODO：如何通过index和m_path检验这个index是否正确？
-
-        bytes32 leaf_hash = keccak256(abi.encodePacked(leafdata[:pos], nonce, noise, leafdata[pos:]));
-        bytes32 merkleHash = MerkleProof.processProofCalldata(m_path, leaf_hash);
+    function _LockSupplierPledge(address supplierAddress, bytes32 dataMixedHash) internal {
+        _adjustSupplierBalance(supplierAddress);
         
-        // 判断hash的最后N位是否为0
-        return uint256(merkleHash) & 1 << difficulty - 1 == 0;
+        SupplierInfo storage supplierInfo = supplier_infos[supplierAddress];
+        
+        uint256 lockAmount = _getLockAmount(dataMixedHash);
+        require(supplierInfo.avalibleBalance >= lockAmount, "insufficient balance");
+        supplierInfo.avalibleBalance -= lockAmount;
+        supplierInfo.lockedBalance += lockAmount;
+        supplierInfo.unlockBlock = block.number + sysConfigShowTimeout;
     }
 
-    // msg.sender is supplier
-    // show_hash = keccak256(abiEncode[sender, dataMixedHash, prev_block_hash, block_number])
+    function _verifyDataProof(bytes32 dataMixedHash,uint256 nonce_block_high, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata, bytes32 noise) private view returns(bytes32,bytes32) {
+        require(nonce_block_high < block.number, "invalid nonce_block_high");
+        require(block.number - nonce_block_high < 256, "nonce block too old");
+
+        bytes32 nonce = blockhash(nonce_block_high);
+
+        //先验证index落在MixedHash包含的长度范围内
+        require(index < (lengthFromMixedHash(dataMixedHash) >> 10) + 1, "invalid index");
+
+        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
+        // hash的头2bits表示hash算法，00 = sha256, 10 = keccak256
+        uint8 hashType = uint8(uint256(dataMixedHash) >> 254);
+        bytes32 dataHash;
+        if (hashType == 0) {
+            // sha256
+            dataHash = _merkleRootWithSha256(m_path, index, _bytes32To16(sha256(leafdata)));
+        } else if (hashType == 2) {
+            // keccak256
+            dataHash = _merkleRootWithKeccak256(m_path, index, _bytes32To16(keccak256(leafdata)));
+        } else {
+            revert("invalid hash type");
+        }
+
+        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
+        // 只比较后192位
+        require(dataHash & bytes32(uint256((1 << 192) - 1)) == dataMixedHash & bytes32(uint256((1 << 192) - 1)), "mixhash mismatch");
+
+        // 不需要计算插入位置，只是简单的在Leaf的数据后部和头部插入，也足够满足我们的设计目的了？
+        bytes memory new_leafdata;
+        if(noise != 0) {
+            //Enable PoW
+            new_leafdata = bytes.concat(leafdata, nonce);
+            bytes32 new_root_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata));
+
+            new_leafdata = bytes.concat(noise, leafdata, nonce);
+            return (new_root_hash,_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)));
+        } else {
+            //Disable PoW
+            new_leafdata = bytes.concat(leafdata, nonce);
+            return (_merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata)),0);
+        }
+    }
+
+    function _merkleRoot(uint8 hashType,bytes16[] calldata proof, uint32 leaf_index,bytes16 leaf_hash) internal pure returns (bytes32) {
+        if (hashType == 0) {
+            // sha256
+            return _merkleRootWithSha256(proof, leaf_index, leaf_hash);
+        } else if (hashType == 2) {
+            // keccak256
+            return _merkleRootWithKeccak256(proof, leaf_index, leaf_hash);
+        } else {
+            revert("invalid hash type");
+        }
+    }
+
+    function _hashLeaf(uint8 hashType,bytes memory leafdata) internal pure returns (bytes16) {
+        if (hashType == 0) {
+            // sha256
+            return _bytes32To16(sha256(leafdata));
+        } else if (hashType == 2) {
+            // keccak256
+            return _bytes32To16(keccak256(leafdata));
+        } else {
+            revert("invalid hash type");
+        }
+    }
+
+    // from openzeppelin`s MerkleProof.sol
+    function _efficientKeccak256(bytes16 a, bytes16 b) private pure returns (bytes32 value) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            mstore(0x00, a)
+            mstore(0x10, b)
+            value := keccak256(0x00, 0x20)
+        }
+    }
+
+    function _bytes32To16(bytes32 b) private pure returns (bytes16) {
+        return bytes16(uint128(uint256(b)));
+    }
+
+    function _merkleRootWithKeccak256(bytes16[] calldata proof, uint32 leaf_index,bytes16 leaf_hash) internal pure returns (bytes32) {
+        bytes16 currentHash = leaf_hash;
+        bytes32 computedHash = 0;
+        for (uint32 i = 0; i < proof.length; i++) {
+            if (proof[i] != bytes32(0)) {
+                if (leaf_index % 2 == 0) {
+                    computedHash = _efficientKeccak256(currentHash, proof[i]);
+                } else {
+                    computedHash = _efficientKeccak256(proof[i], currentHash);
+                }
+            }
+            
+            currentHash = _bytes32To16(computedHash);
+            //require(leaf_index >= 2, "invalid leaf_index");
+            leaf_index = leaf_index / 2;
+        }
+
+        return computedHash;
+    }
+
+    // sha256要比keccak256贵，因为它不是一个EVM内置操作码，而是一个预置的内部合约调用
+    // 当hash 1kb数据时，sha256要贵160，当hash 两个bytes32时，sha256要贵400
+    function _merkleRootWithSha256(bytes16[] calldata proof, uint32 leaf_index, bytes16 leaf_hash) internal pure returns (bytes32) {
+        bytes16 currentHash = leaf_hash;
+        bytes32 computedHash = 0;
+        for (uint32 i = 0; i < proof.length; i++) {
+            if (leaf_index % 2 == 0) {
+                computedHash = sha256(bytes.concat(currentHash, proof[i]));
+            } else {
+                computedHash = sha256(bytes.concat(proof[i], currentHash));
+            }
+            currentHash = _bytes32To16(computedHash);
+            //require(leaf_index >= 2, "invalid leaf_index");
+            leaf_index = leaf_index / 2;
+        }
+
+        return computedHash;
+    }
     
-    function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata, bytes32 noise) public {
+    function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata) public {
         address supplier = msg.sender;
         require(nonce_block < block.number && block.number - nonce_block < maxNonceBlockDistance);
-        require(_validPublicSupplier(supplier, dataMixedHash));
+        _LockSupplierPledge(supplier, dataMixedHash);
         
         // 每个块的每个supplier只能show一次数据 
-        // TODO:这里用this_block_show就好了，不用全保存下来
-        // by weiqiushi: 什么是this_block_show？
         require(all_shows[block.number][supplier] == false);
 
         // check block.number meets certain conditions
-        require(_verifyBlockNumber(dataMixedHash, block.number));
+        // TODO: 这个条件是否还需要？现在有showTimeout来控制show的频率了，可能会更好
+        // require(_verifyBlockNumber(dataMixedHash, block.number));
 
-        bytes32 nonce = blockhash(nonce_block);
-        uint256 pos = uint256(nonce) % 960 + 32;    // 产生的pos在[32, 992]
-
-        // check showHash is correct
-        require(_verifyData(nonce, pos, index, m_path, leafdata, noise));
-
+        // 如果已经存在，判断区块高度差，决定这是一个新的挑战还是对旧的挑战的更新
         PublicData storage publicDataInfo = public_datas[dataMixedHash];
+        bool is_new_show = false;
+        bool challenge_success = false;
+        address oldProver;
+        if(publicDataInfo.proof_block == 0) {
+            is_new_show = true;
+        } else {
+            if (block.number - publicDataInfo.proof_block > sysConfigShowTimeout) {
+                //Last Show Proof successed!
+                
+                uint256 reward = publicDataInfo.data_balance / 10;
+                // 当reward为0时，要不要增加积分？
+                emit SupplierReward(publicDataInfo.prover, dataMixedHash, reward);
+                if (reward > 0) {
+                    // 奖励的80%给supplier，20%被基金会收走，这里实现成还是保存在合约自己的账户上先
+                    gwtToken.transfer(publicDataInfo.prover, reward * 8 / 10);
+                    publicDataInfo.data_balance -= reward;
+                }
+                is_new_show = true;
+            }
+        }
+    
+        // 如果不是新的show，判定为对上一个show的挑战，要检查nonce_block_high是否一致
+        require(is_new_show || publicDataInfo.nonce_block_high == nonce_block, "nonce_block_high not match");
+        (bytes32 root_hash,) = _verifyDataProof(dataMixedHash,nonce_block,index,m_path,leafdata,bytes32(0));
+        
+        if(is_new_show) {
+            publicDataInfo.nonce_block_high = nonce_block;
+            publicDataInfo.proof_result = root_hash;
+            publicDataInfo.proof_block = block.number;
+            publicDataInfo.prover = msg.sender;
+        } else {
+            // 已经有挑战存在：判断是否结果更好，如果更好，更新结果，并更新区块高度
+            if(root_hash < publicDataInfo.proof_result) {
+                //根据经济学模型对虚假的proof提供者进行惩罚
+                uint64 dataSize = getDataSize(dataMixedHash);
 
+                uint256 punishAmount = _getLockAmount(dataMixedHash);
+                supplier_infos[publicDataInfo.prover].lockedBalance -= punishAmount;
+
+                // 都打过去？还是像奖励一样也留一部分？
+                gwtToken.transfer(msg.sender, punishAmount);
+                oldProver = publicDataInfo.prover;
+                emit SupplierPubished(publicDataInfo.prover, dataMixedHash, punishAmount);
+
+                publicDataInfo.proof_result = root_hash;
+                publicDataInfo.proof_block = block.number;
+                publicDataInfo.prover = msg.sender;
+
+                challenge_success = true;
+            } 
+        }
+
+        emit ShowDataProof(msg.sender, dataMixedHash, nonce_block, index, publicDataInfo.proof_result);
+        
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
-        dataInfo.score += getDataSize(dataMixedHash);
+        if (is_new_show) {
+            dataInfo.score += getDataSize(dataMixedHash);
 
-        // insert supplier into last_showers
-        if (dataInfo.shower_index >= 5) {
-            dataInfo.shower_index = 0;
-        }
-        dataInfo.last_showers[dataInfo.shower_index] = supplier;
-        dataInfo.shower_index += 1;
-        
-        //TODO：计算奖励前先判断用户是否有足够的非冻结抵押余额，Show完后会更新LastShowTime，以及冻结的质押余额
-        // REVIEW by weiqiushi: 用户的质押余额会分冻结和非冻结？文档里没有这样的逻辑
-        // 给成功的show一些奖励
-        uint256 reward = publicDataInfo.data_balance / 10;
-        if (reward > 0) {
-            gwtToken.transfer(supplier, reward);
-            publicDataInfo.data_balance -= reward;
-            supplier_pledge[supplier].lastShowBlock = block.number;
-        }
+            // insert supplier into last_showers
+            if (dataInfo.shower_index >= 5) {
+                dataInfo.shower_index = 0;
+            }
+            dataInfo.last_showers[dataInfo.shower_index] = supplier;
+            dataInfo.shower_index += 1;
 
-        // 记录minhash供挑战
-        bytes32 minMerkleHash = MerkleProof.processProofCalldata(m_path, keccak256(abi.encodePacked(leafdata[:pos], nonce, leafdata[pos:])));
-        show_datas[supplier][dataMixedHash] = ShowData(nonce_block, block.number, reward, minMerkleHash);
-
-        // 更新这次cycle的score排名
-        if (cycleInfo.score_list.maxlen() < topRewards) {
-            cycleInfo.score_list.setMaxLen(topRewards);
+            // 更新这次cycle的score排名
+            if (cycleInfo.score_list.maxlen() < topRewards) {
+                cycleInfo.score_list.setMaxLen(topRewards);
+            }
+            cycleInfo.score_list.updateScore(dataMixedHash, dataInfo.score);
+        } else if(challenge_success) {
+            // 挑战成功, 替换掉原来的人
+            for (uint i = 0; i < dataInfo.last_showers.length; i++) {
+                if (dataInfo.last_showers[i] == oldProver) {
+                    dataInfo.last_showers[i] == supplier;
+                }
+            }
         }
-        cycleInfo.score_list.updateScore(dataMixedHash, dataInfo.score);
         
         all_shows[block.number][supplier] = true;
-
-        emit DataShowed(dataMixedHash, supplier, dataInfo.score);
-    }
-
-    // 挑战challengeTo在show_block_number上对dataMixedHash的show
-    // TODO:challenge也可能会被挑战，所以不如简化成showData是上一个showData的挑战。
-    function challenge(address challengeTo, bytes32 dataMixedHash, uint256 show_block_number, uint32 index, bytes32[] calldata m_path, bytes calldata leafdata) public {
-        require(show_block_number == show_datas[challengeTo][dataMixedHash].show_block);
-        require(block.number < show_block_number + lockAfterShow);
-
-        //TODO: 如何验证index是正确的？
-        bytes32 nonce = blockhash(show_datas[challengeTo][dataMixedHash].nonce_block);
-        uint256 pos = uint256(nonce) % 960 + 32;    // 产生的pos在[32, 992]
-
-        bytes32 minMerkleHash = MerkleProof.processProofCalldata(m_path, keccak256(abi.encodePacked(leafdata[:pos], nonce, leafdata[pos:])));
-        if (uint256(minMerkleHash) < uint256(show_datas[challengeTo][dataMixedHash].minHash)) {
-            // 扣除奖励的showDepositRatio倍
-            uint256 reward = show_datas[challengeTo][dataMixedHash].rewardAmount * showDepositRatio;
-            supplier_pledge[challengeTo].pledge[dataMixedHash] -= reward;
-            gwtToken.transfer(msg.sender, reward);
-            emit ChallengeSuccess(msg.sender, challengeTo, show_block_number, dataMixedHash, reward);
-        }
     }
 
     function _getDataOwner(bytes32 dataMixedHash) internal view returns(address) {
@@ -387,7 +524,7 @@ contract PublicDataStorage {
     }
 
     // return: 1: sponser, 2- 6: last shower, 7: owner, 0: no one
-    function _getWithdrawUser(bytes32 dataMixedHash) internal view returns(uint8) {
+    function _getWithdrawRole(bytes32 dataMixedHash) internal view returns(uint8) {
         address sender = msg.sender;
         PublicData memory publicDataInfo = public_datas[dataMixedHash];
         uint8 user = 0;
@@ -434,7 +571,7 @@ contract PublicDataStorage {
 
         // 看看是谁来取
         // REVIEW 这个函数做的事情比较多，建议拆分，或则命名更优雅一些
-        uint8 withdrawUser = _getWithdrawUser(dataMixedHash);
+        uint8 withdrawUser = _getWithdrawRole(dataMixedHash);
 
         require(withdrawUser > 0);
         require(dataInfo.withdraw_status & withdrawUser == 0);
@@ -452,5 +589,9 @@ contract PublicDataStorage {
 
 
         emit WithdrawAward(dataMixedHash, msg.sender, reward);
+    }
+
+    function lengthFromMixedHash(bytes32 dataMixedHash) public pure returns (uint64) {
+        return uint64(uint256(dataMixedHash) >> 192 & ((1 << 62) - 1));
     }
 }
