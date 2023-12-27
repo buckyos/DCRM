@@ -36,8 +36,8 @@ contract GWTToken is ERC20, Ownable {
         return amount / 210;
     }
 
-    function _transfer(address sender, address to, uint256 amount) internal override {
+    function _update(address sender, address to, uint256 amount) internal override {
         require(allow_transfer[sender] || allow_transfer[to], "transfer not allowed");
-        super._transfer(sender, to, amount);
+        super._update(sender, to, amount);
     }
 }
