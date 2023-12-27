@@ -12,6 +12,8 @@ contract GWTToken is ERC20, Ownable {
     // 这种兑换币，是不是需要设定一个最大上限？
     constructor(address _dmcToken) ERC20("Gb storage per Week Token", "GWT") Ownable(msg.sender) {
         dmcToken = DMCToken(_dmcToken);
+        // enable mint and burn
+        allow_transfer[address(0)] = true;
     }
 
     function enableTransfer(address[] calldata addresses) public onlyOwner {
