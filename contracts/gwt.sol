@@ -26,12 +26,12 @@ contract GWTToken is ERC20, Ownable {
         }
     }
 
-    function _calcGWTAmount(uint256 amount, uint256 remainSupply) internal pure returns(uint256) {
+    function _calcGWTAmount(uint256 amount) internal pure returns(uint256) {
         // 1 : 210
         return amount * 210;
     }
 
-    function _calcDMCAmount(uint256 amount, uint256 remainSupply) internal pure returns(uint256) {
+    function _calcDMCAmount(uint256 amount) internal pure returns(uint256) {
         // 210 : 1
         return amount / 210;
     }
@@ -39,5 +39,19 @@ contract GWTToken is ERC20, Ownable {
     function _update(address sender, address to, uint256 amount) internal override {
         require(allow_transfer[sender] || allow_transfer[to], "transfer not allowed");
         super._update(sender, to, amount);
+    }
+
+    function exchange(uint256 amount) public {        
+        uint256 gwtAmount = _calcGWTAmount(amount);
+        
+        dmcToken.transferFrom(msg.sender, address(this), amount);
+        _mint(msg.sender, gwtAmount);
+    }
+
+    function burn(uint256 amount) public {
+        uint256 dmcAmount = _calcDMCAmount(amount);
+
+        dmcToken.transfer(msg.sender, dmcAmount);
+        _burn(msg.sender, amount);
     }
 }
