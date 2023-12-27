@@ -97,7 +97,7 @@ contract PublicDataStorage {
     event GWTUnstacked(address supplier, uint256 amount);
     event PublicDataCreated(bytes32 mixedHash);
     event DepositData(address depositer, bytes32 mixedHash, uint256 balance, uint256 reward);
-    event SponsorChanged(bytes32 mixedHash, address oldSponser, address newSponser);
+    event SponsorChanged(bytes32 mixedHash, address oldSponsor, address newSponsor);
     event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
     event SupplierPubished(address supplier, bytes32 mixedHash, uint256 amount);
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block_high, uint32 index_m, bytes32 proof_result);
@@ -523,7 +523,7 @@ contract PublicDataStorage {
         }
     }
 
-    // return: 1: sponser, 2- 6: last shower, 7: owner, 0: no one
+    // return: 1: sponsor, 2- 6: last shower, 7: owner, 0: no one
     function _getWithdrawRole(bytes32 dataMixedHash) internal view returns(uint8) {
         address sender = msg.sender;
         PublicData memory publicDataInfo = public_datas[dataMixedHash];
@@ -546,7 +546,7 @@ contract PublicDataStorage {
         return user;
     }
 
-    // sponser拿50%, owner拿20%, 5个last shower平分30%
+    // sponsor拿50%, owner拿20%, 5个last shower平分30%
     function _calcuteReward(uint8 user, uint256 totalReward, uint256 last_shower_length) internal pure returns(uint256) {
         uint reward = 0;
         if ((user >> 7) & 1 == 1) {
