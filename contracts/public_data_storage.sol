@@ -213,6 +213,10 @@ contract PublicDataStorage {
         emit DepositData(msg.sender, dataMixedHash, balance_add, system_reward);
     }
 
+    function getPublicData(bytes32 dataMixedHash) public view returns(PublicData memory) {
+        return public_datas[dataMixedHash];
+    }
+
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
         PublicData memory info = public_datas[dataMixedHash];
         if (info.owner != address(0)) {

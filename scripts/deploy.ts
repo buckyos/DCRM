@@ -2,22 +2,23 @@ import { ethers, network } from "hardhat";
 import * as fs from "node:fs";
 
 async function main() {
-    const dmcContract = await (await ethers.deployContract("DMCToken", [ethers.parseEther("1000000")])).waitForDeployment();
+    const dmcContract = await (await ethers.deployContract("DMCToken", [ethers.parseEther("100000000")])).waitForDeployment();
     let dmcAddress = await dmcContract.getAddress();
     console.log("DMCToken deployed to:", dmcAddress);
     const gwtContract = await (await ethers.deployContract("GWTToken", [dmcAddress])).waitForDeployment();
 
     let gwtAddress = await gwtContract.getAddress();
     console.log("GWT deployed to:", gwtAddress);
-    /*
-    const exchangeContract = await (await ethers.deployContract("StorageExchange", [gwtAddress])).waitForDeployment();
-    let exchangeAddress = await exchangeContract.getAddress();
-    console.log("Exchange deployed to:", exchangeAddress);
-    */
-    const sortedScoreList = await (await ethers.deployContract("SortedScoreList")).waitForDeployment();
-    let sortedScoreListAddress = await sortedScoreList.getAddress();
-    console.log("SortedScoreList deployed to:", sortedScoreListAddress);
-    const publicDataStorage = await (await ethers.deployContract("PublicDataStorage", [gwtAddress], {libraries: {"SortedScoreList": sortedScoreListAddress}})).waitForDeployment();
+    
+    let listLibrary = await (await ethers.getContractFactory("SortedScoreList")).deploy();
+    let proofLibrary = await (await ethers.getContractFactory("PublicDataProof")).deploy();
+
+    
+    const publicDataStorage = await (await ethers.deployContract("PublicDataStorage", [gwtAddress], {libraries: {
+        "SortedScoreList": await listLibrary.getAddress(),
+        "PublicDataProof": await proofLibrary.getAddress()
+    }})).waitForDeployment();
+    
     let publicDataStorageAddress = await publicDataStorage.getAddress();
     console.log("PublicDataStorage deployed to:", publicDataStorageAddress);
 
