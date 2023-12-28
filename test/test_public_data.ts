@@ -1,69 +1,112 @@
 import hre, { ethers } from "hardhat";
 import { expect } from "chai";
-import { FakeNFTContract, GWTToken, PublicDataStorage } from "../typechain-types";
+import { DMCToken, FakeNFTContract, GWTToken, PublicDataStorage } from "../typechain-types";
 
-// 需要一个假的NFT合约，用来测试
-// 给这个假NFT合约放1个NFT进去
-// owner signer[0]
+import * as TestDatas from "../testDatas/test_data.json";
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import { mine } from "@nomicfoundation/hardhat-network-helpers";
 
-// 让signer[0]通过NFT创建一个public data，检查数据账户余额和奖池余额
-// 让signer[1]在错误的块上show数据，应该会失败
-// 让signer[1]show数据，检查signer[1]余额和数据账户余额
-// 尝试在同一块内让signer[1]再次show数据，此处应该失败
-// 让signer[11]增加质押金，成为Data1的sponser
-// 让signer[2]到[7]都show数据，确定last_shower正确
-// 前进到当前cycle结束
-// signer[12]通过普通数据创建一个public data，检查此轮的奖池余额是否正确
-// signer[0]将NFT的owner转移给signer[13]
-// signer[0]提取奖金，应该会失败
-// signer[11], signer[12], signer[3-7]提取奖金，检查提取的余额是否正确
+import { generateProof } from "../scripts/generate_proof";
 
 describe("PublicDataStorage", function () {
     let contract: PublicDataStorage;
+    let dmcToken: DMCToken;
     let gwtToken: GWTToken;
+    let signers: HardhatEthersSigner[];
     let nftContract: FakeNFTContract
+
     async function deployContracts() {
         let listLibrary = await (await hre.ethers.getContractFactory("SortedScoreList")).deploy();
-        
-        gwtToken = await (await hre.ethers.deployContract("GWTToken", [ethers.parseEther("100000000")])).waitForDeployment();
 
-        nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
+        dmcToken = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
+        gwtToken = await (await ethers.deployContract("GWTToken", [await dmcToken.getAddress()])).waitForDeployment()
 
+        // nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
+        contract = await (await hre.ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress()], {libraries: {
+            SortedScoreList: await listLibrary.getAddress()
+        }})).waitForDeployment();
 
-        // TODO:
-//        contract = await (await hre.ethers.deployContract("PublicDataStorage", {libraries: {
-//            SortedScoreList: await listLibrary.getAddress()
-//        }})).waitForDeployment();
+        await (await gwtToken.enableTransfer([await contract.getAddress()])).wait();
     }
 
     before(async () => {
         await deployContracts();
 
+        signers = await ethers.getSigners()
 
-        // TODO:
-
-        // await ((await nftContract.addData("", 1)).wait());
+        for (const signer of signers) {
+            await (await dmcToken.transfer(await signer.address, ethers.parseEther("1000"))).wait();
+            await (await dmcToken.connect(signer).approve(await gwtToken.getAddress(), ethers.parseEther("1000"))).wait();
+            await (await gwtToken.connect(signer).exchange(ethers.parseEther("1000"))).wait();
+            await (await gwtToken.connect(signer).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
+        }
     });
 
-    it("create NFT public data");
+    it("create public data", async () => {
+        // 需要的最小抵押：1/8 GB * 96(周) * 64(倍) = 768 GWT
+        await expect(contract.createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .emit(contract, "PublicDataCreated").withArgs(TestDatas[0].hash)
+            .emit(contract, "SponsorChanged").withArgs(TestDatas[0].hash, ethers.ZeroAddress, signers[0].address)
+            .emit(contract, "DepositData").withArgs(signers[0].address, TestDatas[0].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"));
 
-    it("show data on wrong block");
+        expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("614.4"));
+    });
 
-    it("show data");
+    it("deposit data", async () => {
+        await expect(contract.connect(signers[1]).addDeposit(TestDatas[0].hash, ethers.parseEther("100")))
+            .emit(contract, "DepositData").withArgs(signers[1].address, TestDatas[0].hash, ethers.parseEther("80"), ethers.parseEther("20"));
 
-    it("show data twice on same block");
+        expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("694.4"));
+    });
 
-    it("change sponser");
+    it("deposit data and became sponser", async () => {
+        await expect(contract.connect(signers[1]).addDeposit(TestDatas[0].hash, ethers.parseEther("1000")))
+            .emit(contract, "DepositData").withArgs(signers[1].address, TestDatas[0].hash, ethers.parseEther("800"), ethers.parseEther("200"))
+            .emit(contract, "SponsorChanged").withArgs(TestDatas[0].hash, signers[0].address, signers[1].address);
 
-    it("several people show data");
+            expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("1494.4"));
+    });
 
-    it("forward to next cycle");
+    it("supplier pledge GWT", async () => {
+        await (expect(contract.connect(signers[2]).pledgeGwt(ethers.parseEther("10000"))))
+            .emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("10000"), 0);
 
-    it("create normal public data");
+        await (expect(contract.connect(signers[3]).pledgeGwt(ethers.parseEther("10000"))))
+            .emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("10000"), 0);
+    });
 
-    it("change NFT owner");
+    it("show data", async () => {
+        let nonce_block = await ethers.provider.getBlockNumber();
+        await mine();
 
-    it("wrong people withdraw reward");
+        let [min_index, path, leaf, proof] = await generateProof(TestDatas[0].data_file_path, nonce_block, TestDatas[0].merkle_file_path);
 
-    it("several people withdraw reward");
+        // 这个操作会锁定signers[2]的余额 1/8 GB * 24(周) * 64(倍) = 192 GWT
+        await expect(contract.connect(signers[2]).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf))
+            .emit(contract, "ShowDataProof").withArgs(signers[2].address, TestDatas[0].hash, nonce_block, min_index, proof)
+            .emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9808"), ethers.parseEther("192"));
+    });
+
+    it("show data on same block");
+
+    it("show data again", async() => {
+        await mine(720);
+
+        let nonce_block = await ethers.provider.getBlockNumber();
+        await mine();
+        let [min_index, path, leaf, proof] = await generateProof(TestDatas[0].data_file_path, nonce_block, TestDatas[0].merkle_file_path);
+        let tx = contract.connect(signers[3]).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf);
+        await expect(tx)
+            .emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("149.44"))
+            .emit(contract, "ShowDataProof").withArgs(signers[3].address, TestDatas[0].hash, nonce_block, min_index, proof)
+            .emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("9808"), ethers.parseEther("192"));
+
+        // signers[1]得到奖励, 奖励从data[0]的余额里扣除
+        // 得到的奖励：1494.4 * 0.1 * 0.8 = 119.552
+        // 余额扣除：1494.4 * 0.1 = 149.44
+        await expect(tx).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("119.552"))
+            
+        
+        expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("1344.96"));
+    });
 });
