@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "./PublicDataProof.sol";
 
 import "hardhat/console.sol";
 
@@ -125,10 +125,6 @@ contract PublicDataStorage {
         }
     }
 
-    function lengthFromMixedHash(bytes32 dataMixedHash) public pure returns (uint64) {
-        return uint64(uint256(dataMixedHash) >> 192 & ((1 << 62) - 1));
-    }
-
     function _verifyBlockNumber(bytes32 dataMixedHash, uint256 blockNumber) internal pure returns(bool) {
         // (blockNumber xor dataMixedHash) % 64 == 0
         return uint256(bytes32(blockNumber) ^ dataMixedHash) % 64 == 0;
@@ -184,7 +180,7 @@ contract PublicDataStorage {
         require(publicDataInfo.maxDeposit == 0, "public data already exists");
 
         // get data size from data hash
-        uint64 dataSize = lengthFromMixedHash(dataMixedHash);
+        uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
         // 区分质押率和最小时长。最小时长是系统参数，质押率depositRatio是用户参数
         // 质押率影响用户SHOW数据所需要冻结的质押
         // minAmount = 数据大小*最小时长*质押率，
@@ -281,7 +277,7 @@ contract PublicDataStorage {
     }
 
     function _getLockAmount(bytes32 dataMixedHash) internal view returns(uint256) {
-        uint64 dataSize = lengthFromMixedHash(dataMixedHash);
+        uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
         return _dataSizeToGWT(dataSize) * sysMinDepositRatio * sysMinLockWeeks;
     }
 
@@ -299,112 +295,13 @@ contract PublicDataStorage {
         emit SupplierBalanceChanged(supplierAddress, supplierInfo.avalibleBalance, supplierInfo.lockedBalance);
     }
 
-    function _verifyDataProof(bytes32 dataMixedHash,uint256 nonce_block_high, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata, bytes32 noise) private view returns(bytes32,bytes32) {
+    function _verifyDataProof(bytes32 dataMixedHash,uint256 nonce_block_high, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata) private view returns(bytes32,bytes32) {
         require(nonce_block_high < block.number, "invalid nonce_block_high");
         require(block.number - nonce_block_high < 256, "nonce block too old");
 
         bytes32 nonce = blockhash(nonce_block_high);
 
-        //先验证index落在MixedHash包含的长度范围内
-        require(index < (lengthFromMixedHash(dataMixedHash) >> 10) + 1, "invalid index");
-
-        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
-        // hash的头2bits表示hash算法，00 = sha256, 10 = keccak256
-        uint8 hashType = uint8(uint256(dataMixedHash) >> 254);
-
-        bytes32 dataHash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,leafdata));
-        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
-        // 只比较后192位
-        require(dataHash & bytes32(uint256((1 << 192) - 1)) == dataMixedHash & bytes32(uint256((1 << 192) - 1)), "mixhash mismatch");
-
-        // 不需要计算插入位置，只是简单的在Leaf的数据后部和头部插入，也足够满足我们的设计目的了？
-        bytes memory new_leafdata = bytes.concat(leafdata, nonce);
-        bytes32 new_root_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,new_leafdata));
-        bytes32 pow_hash = bytes32(0);
-
-        if(noise != 0) {
-            //Enable PoW
-            pow_hash = _hashLeaf(hashType, bytes.concat(noise, leafdata, nonce));
-        }
-
-        return (new_root_hash, pow_hash);
-    }
-
-    function _merkleRoot(uint8 hashType,bytes16[] calldata proof, uint32 leaf_index,bytes16 leaf_hash) internal pure returns (bytes32) {
-        if (hashType == 0) {
-            // sha256
-            return _merkleRootWithSha256(proof, leaf_index, leaf_hash);
-        } else if (hashType == 2) {
-            // keccak256
-            return _merkleRootWithKeccak256(proof, leaf_index, leaf_hash);
-        } else {
-            revert("invalid hash type");
-        }
-    }
-
-    function _hashLeaf(uint8 hashType,bytes memory leafdata) internal pure returns (bytes16) {
-        if (hashType == 0) {
-            // sha256
-            return _bytes32To16(sha256(leafdata));
-        } else if (hashType == 2) {
-            // keccak256
-            return _bytes32To16(keccak256(leafdata));
-        } else {
-            revert("invalid hash type");
-        }
-    }
-
-    // from openzeppelin`s MerkleProof.sol
-    function _efficientKeccak256(bytes16 a, bytes16 b) private pure returns (bytes32 value) {
-        /// @solidity memory-safe-assembly
-        assembly {
-            mstore(0x00, a)
-            mstore(0x10, b)
-            value := keccak256(0x00, 0x20)
-        }
-    }
-
-    function _bytes32To16(bytes32 b) private pure returns (bytes16) {
-        return bytes16(uint128(uint256(b)));
-    }
-
-    function _merkleRootWithKeccak256(bytes16[] calldata proof, uint32 leaf_index,bytes16 leaf_hash) internal pure returns (bytes32) {
-        bytes16 currentHash = leaf_hash;
-        bytes32 computedHash = bytes32(0);
-        for (uint32 i = 0; i < proof.length; i++) {
-            if (proof[i] != bytes32(0)) {
-                if (leaf_index % 2 == 0) {
-                    computedHash = _efficientKeccak256(currentHash, proof[i]);
-                } else {
-                    computedHash = _efficientKeccak256(proof[i], currentHash);
-                }
-            }
-            currentHash = _bytes32To16(computedHash);
-            
-            //require(leaf_index >= 2, "invalid leaf_index");
-            leaf_index = leaf_index / 2;
-        }
-
-        return computedHash;
-    }
-
-    // sha256要比keccak256贵，因为它不是一个EVM内置操作码，而是一个预置的内部合约调用
-    // 当hash 1kb数据时，sha256要贵160，当hash 两个bytes32时，sha256要贵400
-    function _merkleRootWithSha256(bytes16[] calldata proof, uint32 leaf_index, bytes16 leaf_hash) internal pure returns (bytes32) {
-        bytes16 currentHash = leaf_hash;
-        bytes32 computedHash = 0;
-        for (uint32 i = 0; i < proof.length; i++) {
-            if (leaf_index % 2 == 0) {
-                computedHash = sha256(bytes.concat(currentHash, proof[i]));
-            } else {
-                computedHash = sha256(bytes.concat(proof[i], currentHash));
-            }
-            currentHash = _bytes32To16(computedHash);
-            //require(leaf_index >= 2, "invalid leaf_index");
-            leaf_index = leaf_index / 2;
-        }
-
-        return computedHash;
+        return PublicDataProof.calcDataProof(dataMixedHash, nonce, index, m_path, leafdata, bytes32(0));
     }
     
     function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata) public {
@@ -444,7 +341,7 @@ contract PublicDataStorage {
     
         // 如果不是新的show，判定为对上一个show的挑战，要检查nonce_block_high是否一致
         require(is_new_show || publicDataInfo.nonce_block_high == nonce_block, "nonce_block_high not match");
-        (bytes32 root_hash,) = _verifyDataProof(dataMixedHash,nonce_block,index,m_path,leafdata,bytes32(0));
+        (bytes32 root_hash,) = _verifyDataProof(dataMixedHash,nonce_block,index,m_path,leafdata);
         
         if(is_new_show) {
             publicDataInfo.nonce_block_high = nonce_block;
@@ -478,7 +375,7 @@ contract PublicDataStorage {
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
         if (is_new_show) {
-            dataInfo.score += lengthFromMixedHash(dataMixedHash);
+            dataInfo.score += PublicDataProof.lengthFromMixedHash(dataMixedHash);
 
             // insert supplier into last_showers
             if (dataInfo.shower_index >= 5) {
@@ -576,7 +473,6 @@ contract PublicDataStorage {
         
         // 设置已取标志
         dataInfo.withdraw_status |= withdrawUser;
-
 
         emit WithdrawAward(dataMixedHash, msg.sender, reward);
     }

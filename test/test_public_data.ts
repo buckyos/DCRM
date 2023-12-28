@@ -17,13 +17,15 @@ describe("PublicDataStorage", function () {
 
     async function deployContracts() {
         let listLibrary = await (await hre.ethers.getContractFactory("SortedScoreList")).deploy();
+        let proofLibrary = await (await hre.ethers.getContractFactory("PublicDataProof")).deploy();
 
         dmcToken = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
         gwtToken = await (await ethers.deployContract("GWTToken", [await dmcToken.getAddress()])).waitForDeployment()
 
         // nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
         contract = await (await hre.ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress()], {libraries: {
-            SortedScoreList: await listLibrary.getAddress()
+            SortedScoreList: await listLibrary.getAddress(),
+            PublicDataProof: await proofLibrary.getAddress()
         }})).waitForDeployment();
 
         await (await gwtToken.enableTransfer([await contract.getAddress()])).wait();
