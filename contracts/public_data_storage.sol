@@ -38,6 +38,7 @@ contract PublicDataStorage {
         address sponsor;
         address nftContract;
         uint256 tokenId;
+        uint256 depositRatio;
         uint256 maxDeposit;
         uint256 data_balance;
 
@@ -193,6 +194,7 @@ contract PublicDataStorage {
         // minAmount = 数据大小*最小时长*质押率，
         uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysMinPublicDataStorageWeeks;
         require(depositAmount >= minAmount, "deposit amount is too small");
+        publicDataInfo.depositRatio = depositRatio;
         publicDataInfo.maxDeposit = depositAmount;
         publicDataInfo.sponsor = msg.sender;
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
@@ -293,7 +295,7 @@ contract PublicDataStorage {
 
     function _getLockAmount(bytes32 dataMixedHash) internal view returns(uint256) {
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        return _dataSizeToGWT(dataSize) * sysMinDepositRatio * sysMinLockWeeks;
+        return _dataSizeToGWT(dataSize) * public_datas[dataMixedHash].depositRatio * sysMinLockWeeks;
     }
 
     function _LockSupplierPledge(address supplierAddress, bytes32 dataMixedHash) internal {
