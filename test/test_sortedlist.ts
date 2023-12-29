@@ -85,6 +85,14 @@ describe("SortedList", function () {
         expect(await contract.getRanking(testDatas[0].hash)).to.equal(1);
     })
 
+    it("update first element", async() => {
+        //let hash = "0x43b13a1e579f5b32682a6a180560c5d461db512d1050cebe6c7b749d6ef4a92e"
+
+        await (await contract.addScore(testDatas[0].hash, testDatas[0].score+1));
+
+        expect(await contract.getRanking(testDatas[0].hash)).to.equal(1);
+    })
+
     it("two elements", async () => {
         await loadFixture(deployContracts)  // 重置链上数据
         await (await contract.setMaxLen(realMaxLength)).wait();

@@ -91,7 +91,8 @@ contract PublicDataStorage {
     uint256 constant public maxNonceBlockDistance = 2;  // 允许的nonce block距离, lockAfterShow + maxNonceBlockDistance要小于256
     uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
     uint256 constant public showDepositRatio = 3; // SHOW的时候抵押的GWT倍数
-    uint256 constant public totalRewardScore = 1572; // 将rewardScores相加得到的结果
+    //uint256 constant public totalRewardScore = 1572; // 将rewardScores相加得到的结果
+    uint256 constant public totalRewardScore = 1600; // 将rewardScores相加得到的结果
     uint64 constant public sysMinDataSize = 1 << 27; // dataSize换算GWT时，最小值为128M
 
     event SupplierBalanceChanged(address supplier, uint256 avalibleBalance, uint256 lockedBalance);
@@ -112,12 +113,18 @@ contract PublicDataStorage {
     }
 
     function _getRewardScore(uint256 ranking) internal pure returns(uint256) {
+        /*
         uint8[32] memory rewardScores = [
             240, 180, 150, 120, 100, 80, 60, 50, 40, 
             35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 
             24, 23, 22, 21, 20, 19, 18 ,17, 16, 15, 14, 13
         ];
-
+        */
+        uint8[32] memory rewardScores = [
+            240, 180, 150, 120, 100, 80, 60, 53, 42, 36,
+            35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 
+            24, 23, 22, 21, 20, 19, 18 ,17, 16, 15, 14
+        ];
         if (ranking <= rewardScores.length) {
             return rewardScores[ranking - 1];
         } else {
@@ -215,6 +222,10 @@ contract PublicDataStorage {
 
     function getPublicData(bytes32 dataMixedHash) public view returns(PublicData memory) {
         return public_datas[dataMixedHash];
+    }
+
+    function getCurrectLastShowed(bytes32 dataMixedHash) public view returns(address[5] memory) {
+        return cycle_infos[_cycleNumber()].data_infos[dataMixedHash].last_showers;
     }
 
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
@@ -405,8 +416,7 @@ contract PublicDataStorage {
         all_shows[block.number][supplier] = true;
     }
 
-    function _getDataOwner(bytes32 dataMixedHash) internal view returns(address) {
-        PublicData memory publicDataInfo = public_datas[dataMixedHash];
+    function _getDataOwner(bytes32 dataMixedHash, PublicData memory publicDataInfo) internal view returns(address) {
         if (publicDataInfo.owner != address(0)) {
             return publicDataInfo.owner;
         } else {
@@ -415,19 +425,16 @@ contract PublicDataStorage {
     }
 
     // return: 1: sponsor, 2- 6: last shower, 7: owner, 0: no one
-    function _getWithdrawRole(bytes32 dataMixedHash) internal view returns(uint8) {
-        address sender = msg.sender;
-        PublicData memory publicDataInfo = public_datas[dataMixedHash];
+    function _getWithdrawRole(address sender, bytes32 dataMixedHash, PublicData memory publicDataInfo, CycleDataInfo memory dataInfo) internal view returns(uint8) {
         uint8 user = 0;
         if (sender == publicDataInfo.sponsor) {
             user |= 1 << 1;
         }
 
-        if (sender == _getDataOwner(dataMixedHash)) {
+        if (sender == _getDataOwner(dataMixedHash, publicDataInfo)) {
             user |= 1 << 7;
         } 
     
-        CycleDataInfo memory dataInfo = cycle_infos[_cycleNumber()].data_infos[dataMixedHash];
         for (uint8 i = 0; i < dataInfo.last_showers.length; i++) {
             if (dataInfo.last_showers[i] == sender) {
                 user |= uint8(1 << (i+2));
@@ -440,29 +447,31 @@ contract PublicDataStorage {
     // sponsor拿50%, owner拿20%, 5个last shower平分30%
     function _calcuteReward(uint8 user, uint256 totalReward, uint256 last_shower_length) internal pure returns(uint256) {
         uint reward = 0;
-        if ((user >> 7) & 1 == 1) {
+        if ((user >> 1) & 1 == 1) {
             reward += totalReward / 2;
         } 
-        if ((user >> 1) & 1 == 1) {
+        if ((user >> 7) & 1 == 1) {
             reward += totalReward / 5;
         }
         if (user & 124 > 0) {
             reward += (totalReward - totalReward / 2 - totalReward / 5) / last_shower_length;
         }
+
+        return reward;
     }
 
     function withdrawAward(uint cycleNumber, bytes32 dataMixedHash) public {
         // 判断这次的cycle已经结束
         require(block.number > cycleNumber * blocksPerCycle + startBlock, "cycle not finish");
-        CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
+        CycleInfo storage cycleInfo = cycle_infos[cycleNumber];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
         //REVIEW:一次排序并保存的GAS和32次内存排序的成本问题？
         uint256 scoreListRanking = cycleInfo.score_list.getRanking(dataMixedHash);
-        require(scoreListRanking > 0);
+        require(scoreListRanking > 0, "data not in rank");
 
         // 看看是谁来取
         // REVIEW 这个函数做的事情比较多，建议拆分，或则命名更优雅一些
-        uint8 withdrawUser = _getWithdrawRole(dataMixedHash);
+        uint8 withdrawUser = _getWithdrawRole(msg.sender, dataMixedHash, public_datas[dataMixedHash], dataInfo);
 
         require(withdrawUser > 0, "cannot withdraw");
         require(dataInfo.withdraw_status & withdrawUser == 0, "already withdraw");
@@ -470,9 +479,12 @@ contract PublicDataStorage {
         // 计算该得到多少奖励
         uint256 totalReward = cycleInfo.total_award * 8 / 10;
 
-        uint256 dataReward = totalReward * _getRewardScore(scoreListRanking) / totalRewardScore;
-
+        uint256 data_score = _getRewardScore(scoreListRanking);
+        // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
+        uint256 dataReward = totalReward * data_score / totalRewardScore;
+        //console.log("data score %d reward %d", data_score, dataReward);
         uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.last_showers.length);
+        console.log("%s withdraw %d", msg.sender, reward);
         gwtToken.transfer(msg.sender, reward);
         
         // 设置已取标志
