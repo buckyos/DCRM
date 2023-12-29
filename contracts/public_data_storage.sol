@@ -57,6 +57,8 @@ contract PublicDataStorage {
 
     GWTToken public gwtToken;// Gb per Week Token
 
+    address public foundationAddress;
+
     mapping(address => SupplierInfo) supplier_infos;
 
     mapping(bytes32 => PublicData) public_datas;
@@ -74,6 +76,11 @@ contract PublicDataStorage {
         mapping(bytes32 => CycleDataInfo) data_infos; 
         SortedScoreList.List score_list;
         uint256 total_award;    // 记录这个cycle的总奖励
+    }
+
+    struct CycleOutputInfo {
+        uint256 total_reward;
+        bytes32[] data_ranking;
     }
 
     mapping(uint256 => CycleInfo) cycle_infos;
@@ -107,10 +114,11 @@ contract PublicDataStorage {
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block_high, uint32 index_m, bytes32 proof_result);
     event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
 
-    constructor(address _gwtToken) {
+    constructor(address _gwtToken, address _Foundation) {
         gwtToken = GWTToken(_gwtToken);
         startBlock = block.number;
         currectCycle = 0;
+        foundationAddress = _Foundation;
     }
 
     function _getRewardScore(uint256 ranking) internal pure returns(uint256) {
@@ -228,6 +236,14 @@ contract PublicDataStorage {
 
     function getCurrectLastShowed(bytes32 dataMixedHash) public view returns(address[5] memory) {
         return cycle_infos[_cycleNumber()].data_infos[dataMixedHash].last_showers;
+    }
+
+    function getDataInCycle(uint256 cycleNumber, bytes32 dataMixedHash) public view returns(CycleDataInfo memory) {
+        return cycle_infos[cycleNumber].data_infos[dataMixedHash];
+    }
+
+    function getCycleInfo(uint256 cycleNumber) public view returns(CycleOutputInfo memory) {
+        return CycleOutputInfo(cycle_infos[cycleNumber].total_award, cycle_infos[cycleNumber].score_list.getSortedList());
     }
 
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
@@ -348,8 +364,9 @@ contract PublicDataStorage {
                 // 当reward为0时，要不要增加积分？
                 emit SupplierReward(publicDataInfo.prover, dataMixedHash, reward);
                 if (reward > 0) {
-                    // 奖励的80%给supplier，20%被基金会收走，这里实现成还是保存在合约自己的账户上先
+                    // 奖励的80%给supplier，20%被基金会收走
                     gwtToken.transfer(publicDataInfo.prover, reward * 8 / 10);
+                    gwtToken.transfer(foundationAddress, reward - reward * 8 / 10);
                     publicDataInfo.data_balance -= reward;
                 }
                 is_new_show = true;
