@@ -13,8 +13,9 @@ async function main() {
     let listLibrary = await (await ethers.getContractFactory("SortedScoreList")).deploy();
     let proofLibrary = await (await ethers.getContractFactory("PublicDataProof")).deploy();
 
+    let foundationAddress = (await ethers.getSigners())[19].address;
     
-    const publicDataStorage = await (await ethers.deployContract("PublicDataStorage", [gwtAddress], {libraries: {
+    const publicDataStorage = await (await ethers.deployContract("PublicDataStorage", [gwtAddress, foundationAddress], {libraries: {
         "SortedScoreList": await listLibrary.getAddress(),
         "PublicDataProof": await proofLibrary.getAddress()
     }})).waitForDeployment();

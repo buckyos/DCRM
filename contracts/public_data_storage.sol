@@ -111,7 +111,7 @@ contract PublicDataStorage {
     event SponsorChanged(bytes32 mixedHash, address oldSponsor, address newSponsor);
     event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
     event SupplierPubished(address supplier, bytes32 mixedHash, uint256 amount);
-    event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block_high, uint32 index_m, bytes32 proof_result);
+    event ShowDataProof(address supplier, bytes32 dataMixedHash);
     event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
 
     constructor(address _gwtToken, address _Foundation) {
@@ -404,7 +404,7 @@ contract PublicDataStorage {
             } 
         }
 
-        emit ShowDataProof(msg.sender, dataMixedHash, nonce_block, index, publicDataInfo.proof_result);
+        emit ShowDataProof(msg.sender, dataMixedHash);
         
         CycleInfo storage cycleInfo = cycle_infos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.data_infos[dataMixedHash];
