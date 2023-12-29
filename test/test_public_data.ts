@@ -13,6 +13,7 @@ import { generateProof } from "../scripts/generate_proof";
  * 0: data owner
  * 1: data sponser
  * 2-10: data supplier
+ * 19: Foundation
  */
 
 describe("PublicDataStorage", function () {
@@ -30,7 +31,7 @@ describe("PublicDataStorage", function () {
         gwtToken = await (await ethers.deployContract("GWTToken", [await dmcToken.getAddress()])).waitForDeployment()
 
         // nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
-        contract = await (await ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress()], {libraries: {
+        contract = await (await ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress(), signers[19].address], {libraries: {
             SortedScoreList: await listLibrary.getAddress(),
             PublicDataProof: await proofLibrary.getAddress()
         }})).waitForDeployment();
@@ -39,9 +40,8 @@ describe("PublicDataStorage", function () {
     }
 
     before(async () => {
-        await deployContracts();
-
         signers = await ethers.getSigners()
+        await deployContracts();
 
         for (const signer of signers) {
             await (await dmcToken.transfer(await signer.address, ethers.parseEther("1000"))).wait();
@@ -140,17 +140,14 @@ describe("PublicDataStorage", function () {
         // 奖池数量：373.6, 本期可分配：373.6 * 0.8 = 298.88
         // data[0]可分到298.88 * 240 / 1600 = 44.832
         // owner获得44.832*0.2=8.9664
-        console.log(`signer 0 ${signers[0].address} will withdraw in ts:`);
         await expect(contract.connect(signers[0]).withdrawAward(1, TestDatas[0].hash))
             .changeTokenBalance(gwtToken, signers[0], ethers.parseEther("8.9664"));
         // sponser获得44.832*0.5 = 22.416
-        console.log(`signer 1 ${signers[1].address} will withdraw in ts:`);
         await expect(contract.connect(signers[1]).withdrawAward(1, TestDatas[0].hash))
             .changeTokenBalance(gwtToken, signers[1], ethers.parseEther("22.416"));
         
         // signers3-7每人获得44.832*0.3/5 = 2.68992
         for (let index = 3; index <= 7; index++) {
-            console.log(`signer ${index} ${signers[index].address} will withdraw in ts:`);
             await expect(contract.connect(signers[index]).withdrawAward(1, TestDatas[0].hash))
                 .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("2.68992"));
         }
