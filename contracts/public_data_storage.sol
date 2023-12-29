@@ -482,9 +482,7 @@ contract PublicDataStorage {
         uint256 data_score = _getRewardScore(scoreListRanking);
         // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
         uint256 dataReward = totalReward * data_score / totalRewardScore;
-        //console.log("data score %d reward %d", data_score, dataReward);
         uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.last_showers.length);
-        console.log("%s withdraw %d", msg.sender, reward);
         gwtToken.transfer(msg.sender, reward);
         
         // 设置已取标志
