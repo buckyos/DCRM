@@ -14,6 +14,7 @@ import { generateProof } from "../scripts/generate_proof";
  * 1: data sponser
  * 2-10: data supplier
  * 19: Foundation
+ * 15: failed owner
  */
 
 describe("PublicDataStorage", function () {
@@ -59,6 +60,44 @@ describe("PublicDataStorage", function () {
             .emit(contract, "DepositData").withArgs(signers[0].address, TestDatas[0].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"));
 
         expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("614.4"));
+    });
+
+    it("create public data failed", async () => {
+        // duplicate create
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("public data already exists")
+
+        // invalid hash
+        await expect(contract.connect(signers[15]).createPublicData(ethers.ZeroHash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("data hash is empty")
+
+        // // too little
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 0, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("deposit ratio is too small")
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 63, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("deposit ratio is too small")
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("0"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("deposit amount is too small")
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("767.9"), ethers.ZeroAddress, 0))
+            .to.be.revertedWith("deposit amount is too small")
+
+        // // more then total gwt amounts
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210001"), ethers.ZeroAddress, 0))
+            .to.be.reverted;
+
+        // cut the appropriate amount
+        await (await gwtToken.connect(signers[15]).approve(await contract.getAddress(), ethers.parseEther("767"))).wait();
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .to.be.reverted;
+
+        // cost all gwts
+        await (await gwtToken.connect(signers[15]).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210000"), ethers.ZeroAddress, 0))
+            .emit(contract, "PublicDataCreated").withArgs(TestDatas[9].hash)
+            .emit(contract, "SponsorChanged").withArgs(TestDatas[9].hash, ethers.ZeroAddress, signers[15].address)
+            .emit(contract, "DepositData").withArgs(signers[15].address, TestDatas[9].hash, ethers.parseEther("168000"), ethers.parseEther("42000"));
+        
+        expect(await contract.dataBalance(TestDatas[9].hash)).to.equal(ethers.parseEther("168000"));
     });
 
     it("deposit data", async () => {
@@ -151,5 +190,13 @@ describe("PublicDataStorage", function () {
             await expect(contract.connect(signers[index]).withdrawAward(1, TestDatas[0].hash))
                 .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("2.68992"));
         }
+    });
+
+    it("show data failed", async() => {
+        // TODO
+    });
+    
+    it("show data failed", async() => {
+        // TODO
     });
 });
