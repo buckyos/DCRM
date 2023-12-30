@@ -14,7 +14,10 @@ import { generateProof } from "../scripts/generate_proof";
  * 1: data sponser
  * 2-10: data supplier
  * 19: Foundation
- * 15: failed owner
+ * 14: normal flow, large balance
+ * 15: failed owner: all paid to create public data
+ * 16: other large balance
+ * 17: all paid to deposit public data, and append 1 dmc
  */
 
 describe("PublicDataStorage", function () {
@@ -50,6 +53,17 @@ describe("PublicDataStorage", function () {
             await (await gwtToken.connect(signer).exchange(ethers.parseEther("1000"))).wait();
             await (await gwtToken.connect(signer).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
         }
+
+        // large balance
+        await (await dmcToken.transfer(await signers[14].address, ethers.parseEther("1000000"))).wait();
+        await (await dmcToken.connect(signers[14]).approve(await gwtToken.getAddress(), ethers.parseEther("1000000"))).wait();
+        await (await gwtToken.connect(signers[14]).exchange(ethers.parseEther("1000000"))).wait();
+        await (await gwtToken.connect(signers[14]).approve(await contract.getAddress(), ethers.parseEther("210000000"))).wait();
+        
+        await (await dmcToken.transfer(await signers[16].address, ethers.parseEther("1000000"))).wait();
+        await (await dmcToken.connect(signers[16]).approve(await gwtToken.getAddress(), ethers.parseEther("1000000"))).wait();
+        await (await gwtToken.connect(signers[16]).exchange(ethers.parseEther("1000000"))).wait();
+        await (await gwtToken.connect(signers[16]).approve(await contract.getAddress(), ethers.parseEther("210000000"))).wait();
     });
 
     it("create public data", async () => {
@@ -98,6 +112,7 @@ describe("PublicDataStorage", function () {
             .emit(contract, "DepositData").withArgs(signers[15].address, TestDatas[9].hash, ethers.parseEther("168000"), ethers.parseEther("42000"));
         
         expect(await contract.dataBalance(TestDatas[9].hash)).to.equal(ethers.parseEther("168000"));
+        expect((await gwtToken.balanceOf(signers[15].address))).to.equal(ethers.parseEther("0"));
     });
 
     it("deposit data", async () => {
@@ -105,6 +120,68 @@ describe("PublicDataStorage", function () {
             .emit(contract, "DepositData").withArgs(signers[1].address, TestDatas[0].hash, ethers.parseEther("80"), ethers.parseEther("20"));
 
         expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("694.4"));
+    });
+
+    it("deposit data failed", async () => {
+        // prepare
+        await expect(contract.connect(signers[14]).createPublicData(TestDatas[8].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+            .emit(contract, "PublicDataCreated").withArgs(TestDatas[8].hash)
+            .emit(contract, "SponsorChanged").withArgs(TestDatas[8].hash, ethers.ZeroAddress, signers[14].address)
+            .emit(contract, "DepositData").withArgs(signers[14].address, TestDatas[8].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"));
+        
+        expect(await contract.dataBalance(TestDatas[8].hash)).to.equal(ethers.parseEther("614.4"));
+        expect((await contract.getPublicData(TestDatas[8].hash)).sponsor).to.equal(signers[14].address);
+
+        // invalid hash
+        await expect(contract.connect(signers[1]).addDeposit(ethers.ZeroHash, ethers.parseEther("100")))
+            .to.be.revertedWith('public data not exist');
+
+        // invalid amount
+        await expect(contract.connect(signers[1]).addDeposit(ethers.ZeroHash, ethers.parseEther("0")))
+            .to.be.reverted;
+
+        // larger then balance
+        await expect(contract.connect(signers[17]).addDeposit(TestDatas[8].hash, ethers.parseEther("210001")))
+            .to.be.reverted;
+
+        // little than 768 * 1.1
+        await expect(contract.connect(signers[17]).addDeposit(TestDatas[8].hash, ethers.parseEther("844.7")))
+            .emit(contract, "DepositData").withArgs(signers[17].address, TestDatas[8].hash, ethers.parseEther("675.76"), ethers.parseEther("168.94"));
+
+        expect(await contract.dataBalance(TestDatas[8].hash)).to.equal(ethers.parseEther("1290.16"));
+        expect((await contract.getPublicData(TestDatas[8].hash)).sponsor).to.equal(signers[14].address);
+
+        // equal to maxAmount * 1.1
+        // total amount larger than maxAmount * 1.1
+        await expect(contract.connect(signers[17]).addDeposit(TestDatas[8].hash, ethers.parseEther("844.8")))
+        .emit(contract, "DepositData").withArgs(signers[17].address, TestDatas[8].hash, ethers.parseEther("675.84"), ethers.parseEther("168.96"));
+
+        expect(await contract.dataBalance(TestDatas[8].hash)).to.equal(ethers.parseEther("1966"));
+        expect((await contract.getPublicData(TestDatas[8].hash)).sponsor).to.equal(signers[14].address);
+
+        // larger to maxAmount * 1.1
+        // total amount larger than maxAmount * 1.1
+        await expect(contract.connect(signers[17]).addDeposit(TestDatas[8].hash, ethers.parseEther("844.9")))
+        .emit(contract, "DepositData").withArgs(signers[17].address, TestDatas[8].hash, ethers.parseEther("675.92"), ethers.parseEther("168.98"));
+
+        expect(await contract.dataBalance(TestDatas[8].hash)).to.equal(ethers.parseEther("2641.92"));
+        expect((await contract.getPublicData(TestDatas[8].hash)).sponsor).to.equal(signers[17].address);
+        
+        // pay all
+        // total amount larger than maxAmount * 1.1
+        await expect(contract.connect(signers[17]).addDeposit(TestDatas[8].hash, ethers.parseEther("207465.6")))
+        .emit(contract, "DepositData").withArgs(signers[17].address, TestDatas[8].hash, ethers.parseEther("165972.48"), ethers.parseEther("41493.12"));
+
+        expect(await contract.dataBalance(TestDatas[8].hash)).to.equal(ethers.parseEther("168614.4"));
+        expect((await contract.getPublicData(TestDatas[8].hash)).sponsor).to.equal(signers[17].address);
+        expect((await gwtToken.balanceOf(signers[17].address))).to.equal(ethers.parseEther("0"));
+
+        await (await dmcToken.transfer(await signers[17].address, ethers.parseEther("1"))).wait();
+        await (await dmcToken.connect(signers[17]).approve(await gwtToken.getAddress(), ethers.parseEther("1"))).wait();
+        await (await gwtToken.connect(signers[17]).exchange(ethers.parseEther("1"))).wait();
+        await (await gwtToken.connect(signers[17]).approve(await contract.getAddress(), ethers.parseEther("210"))).wait();
+        
+        expect((await gwtToken.balanceOf(signers[17].address))).to.equal(ethers.parseEther("210"));
     });
 
     it("deposit data and became sponser", async () => {
@@ -190,13 +267,5 @@ describe("PublicDataStorage", function () {
             await expect(contract.connect(signers[index]).withdrawAward(1, TestDatas[0].hash))
                 .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("2.68992"));
         }
-    });
-
-    it("show data failed", async() => {
-        // TODO
-    });
-    
-    it("show data failed", async() => {
-        // TODO
     });
 });
