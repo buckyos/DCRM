@@ -69,7 +69,7 @@ contract PublicDataStorage {
 
     struct CycleDataInfo {
         uint256 score;
-        address[5] lasShowers;
+        address[5] lastShowers;
         uint8 showerIndex;
         uint8 withdrawStatus;
     }
@@ -165,8 +165,7 @@ contract PublicDataStorage {
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         if (cycleInfo.totalAward == 0) {
             uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
-            cycleInfo.totalAward = (lastCycleReward * 3 / 20);
-            _cycleInfos[cycleNumber - 1].totalAward = lastCycleReward * 4 / 5;
+            cycleInfo.totalAward = (lastCycleReward - (lastCycleReward * 4 / 5));
         }
         cycleInfo.totalAward += amount;
 
@@ -239,7 +238,7 @@ contract PublicDataStorage {
     }
 
     function getCurrectLastShowed(bytes32 dataMixedHash) public view returns(address[5] memory) {
-        return _cycleInfos[_cycleNumber()].dataInfos[dataMixedHash].lasShowers;
+        return _cycleInfos[_cycleNumber()].dataInfos[dataMixedHash].lastShowers;
     }
 
     function getDataInCycle(uint256 cycleNumber, bytes32 dataMixedHash) public view returns(CycleDataInfo memory) {
@@ -359,19 +358,21 @@ contract PublicDataStorage {
         emit SupplierReward(proof.prover, dataMixedHash, reward);
         if (reward > 0) {
             //REVIEW 2:8分是在Sponsor里做的，正常胜利不用做
+            // REVIEW：正常胜利没有抽成了么？考虑一个矿工有多个账户的情况，他可以自己show自己的数据，把create时抵押的GWT全部拿走。相当于无成本刷score
             gwtToken.transfer(proof.prover, reward);
             publicDataInfo.dataBalance -= reward;
         }
 
         CycleInfo storage cycleInfo = _cycleInfos[_cycleNumber()];
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
+        // TODO：Score要不要和size关联？只+1的话，容易鼓励supplier只show小数据，因为风险最低
         dataInfo.score += 1;
 
         // insert supplier into last_showers
         if (dataInfo.showerIndex >= 5) {
             dataInfo.showerIndex = 0;
         }
-        dataInfo.lasShowers[dataInfo.showerIndex] = proof.prover;
+        dataInfo.lastShowers[dataInfo.showerIndex] = proof.prover;
         dataInfo.showerIndex += 1;
 
         // 更新这次cycle的score排名
@@ -453,6 +454,7 @@ contract PublicDataStorage {
                     willLockAmount = publicDataInfo.dataBalance * 2 / 10;   
                 } 
                 //TODO:这里锁定失败不应该回滚交易？
+                // REVIEW：既然挑战者也走正常的show逻辑，也可以立刻拿到奖励，这里应该当作普通的supplier对待，否则他也是错的怎么办？
                 proof.lockedAmount = _LockSupplierPledge(supplier, dataMixedHash,willLockAmount);
                 if(willLockAmount !=0 && willLockAmount < proof.lockedAmount) {
                     showType = ShowType.Normal;
@@ -489,8 +491,8 @@ contract PublicDataStorage {
             user |= 1 << 7;
         } 
     
-        for (uint8 i = 0; i < dataInfo.lasShowers.length; i++) {
-            if (dataInfo.lasShowers[i] == sender) {
+        for (uint8 i = 0; i < dataInfo.lastShowers.length; i++) {
+            if (dataInfo.lastShowers[i] == sender) {
                 user |= uint8(1 << (i+2));
             }
         }
@@ -524,7 +526,6 @@ contract PublicDataStorage {
         require(scoreListRanking > 0, "data not in rank");
 
         // 看看是谁来取
-        // REVIEW _publicDatas 保存SHOW的逻辑已经改变了，这里要改
         uint8 withdrawUser = _getWithdrawRole(msg.sender, dataMixedHash, _publicDatas[dataMixedHash], dataInfo);
 
         require(withdrawUser > 0, "cannot withdraw");
@@ -535,8 +536,9 @@ contract PublicDataStorage {
 
         uint256 data_score = _getRewardScore(scoreListRanking);
         // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
+        // TODO：多余的奖励是不是可以让基金会提现？只沉淀在合约账户的话，最后要怎么办？
         uint256 dataReward = totalReward * data_score / totalRewardScore;
-        uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.lasShowers.length);
+        uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.lastShowers.length);
         gwtToken.transfer(msg.sender, reward);
         
         // 设置已取标志
