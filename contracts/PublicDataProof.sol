@@ -28,13 +28,14 @@ library PublicDataProof {
 
         if(noise != 0) {
             //Enable PoW
-            pow_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType, bytes.concat(noise, leafdata, nonce)));
+            pow_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType, bytes.concat(leafdata, nonce, noise)));
         }
 
         return (new_root_hash, pow_hash);
     }
 
     function lengthFromMixedHash(bytes32 dataMixedHash) public pure returns (uint64) {
+        //REVIEW 1<<62是常数，会不会每次都消耗GAS计算？
         return uint64(uint256(dataMixedHash) >> 192 & ((1 << 62) - 1));
     }
 

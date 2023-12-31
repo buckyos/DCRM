@@ -28,14 +28,14 @@ contract GWTToken is ERC20, Ownable {
         }
     }
 
-    function _calcGWTAmount(uint256 amount) internal pure returns(uint256) {
+    function _calcGWTAmount(uint256 dmc_amount) internal pure returns(uint256) {
         // 1 : 210
-        return amount * 210;
+        return dmc_amount * 210;
     }
 
-    function _calcDMCAmount(uint256 amount) internal pure returns(uint256) {
+    function _calcDMCAmount(uint256 gwt_amount) internal pure returns(uint256) {
         // 210 : 1
-        return amount / 210;
+        return gwt_amount / 210;
     }
 
     function _update(address sender, address to, uint256 amount) internal override {
@@ -43,6 +43,9 @@ contract GWTToken is ERC20, Ownable {
         super._update(sender, to, amount);
     }
 
+
+    //REVIEW 把兑换合约独立出去，GWT合约只需要认兑换合约（而不是认DMC合约）就可以。
+    //  兑换合约是可升级逻辑的。
     function exchange(uint256 amount) public {        
         uint256 gwtAmount = _calcGWTAmount(amount);
         
