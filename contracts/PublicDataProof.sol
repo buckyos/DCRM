@@ -89,11 +89,12 @@ library PublicDataProof {
             if (proof[i] != bytes32(0)) {
                 if (leaf_index % 2 == 0) {
                     computedHash = _efficientKeccak256(currentHash, proof[i]);
+                    
                 } else {
                     computedHash = _efficientKeccak256(proof[i], currentHash);
                 }
+                currentHash = _bytes32To16(computedHash);
             }
-            currentHash = _bytes32To16(computedHash);
             
             //require(leaf_index >= 2, "invalid leaf_index");
             leaf_index = leaf_index / 2;
