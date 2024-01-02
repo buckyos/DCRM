@@ -84,7 +84,6 @@ library SortedScoreList {
     }
 
     function length(List storage self) public view returns (uint256) {
-        // 测试用，判断整个列表长度
         uint32 cur_length = 0;
         bytes32 current = self.head;
         while (current != bytes32(0)) {

@@ -1,6 +1,6 @@
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 import { expect } from "chai";
-import { DMCToken, FakeNFTContract, GWTToken, PublicDataStorage } from "../typechain-types";
+import { DMCToken, Exchange, FakeNFTContract, GWTToken, PublicDataStorage } from "../typechain-types";
 
 import * as TestDatas from "../testDatas/test_data.json";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
@@ -24,6 +24,7 @@ describe("PublicDataStorage", function () {
     let contract: PublicDataStorage;
     let dmcToken: DMCToken;
     let gwtToken: GWTToken;
+    let exchange: Exchange;
     let signers: HardhatEthersSigner[];
     let nftContract: FakeNFTContract
 
@@ -32,7 +33,16 @@ describe("PublicDataStorage", function () {
         let proofLibrary = await (await ethers.getContractFactory("PublicDataProof")).deploy();
 
         dmcToken = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
-        gwtToken = await (await ethers.deployContract("GWTToken", [await dmcToken.getAddress()])).waitForDeployment()
+        gwtToken = await (await ethers.deployContract("GWTToken")).waitForDeployment()
+        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
+            [await dmcToken.getAddress(), await gwtToken.getAddress()], 
+            {
+                initializer: "initialize",
+                kind: "uups",
+                timeout: 0
+            })).waitForDeployment() as unknown as Exchange;
+
+        await (await gwtToken.enableMinter([await exchange.getAddress()])).wait();
 
         // nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
         contract = await (await ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress(), signers[19].address], {libraries: {
@@ -49,20 +59,20 @@ describe("PublicDataStorage", function () {
 
         for (const signer of signers) {
             await (await dmcToken.transfer(await signer.address, ethers.parseEther("1000"))).wait();
-            await (await dmcToken.connect(signer).approve(await gwtToken.getAddress(), ethers.parseEther("1000"))).wait();
-            await (await gwtToken.connect(signer).exchange(ethers.parseEther("1000"))).wait();
+            await (await dmcToken.connect(signer).approve(await exchange.getAddress(), ethers.parseEther("1000"))).wait();
+            await (await exchange.connect(signer).exchangeGWT(ethers.parseEther("1000"))).wait();
             await (await gwtToken.connect(signer).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
         }
 
         // large balance
         await (await dmcToken.transfer(await signers[14].address, ethers.parseEther("1000000"))).wait();
-        await (await dmcToken.connect(signers[14]).approve(await gwtToken.getAddress(), ethers.parseEther("1000000"))).wait();
-        await (await gwtToken.connect(signers[14]).exchange(ethers.parseEther("1000000"))).wait();
+        await (await dmcToken.connect(signers[14]).approve(await exchange.getAddress(), ethers.parseEther("1000000"))).wait();
+        await (await exchange.connect(signers[14]).exchangeGWT(ethers.parseEther("1000000"))).wait();
         await (await gwtToken.connect(signers[14]).approve(await contract.getAddress(), ethers.parseEther("210000000"))).wait();
         
         await (await dmcToken.transfer(await signers[16].address, ethers.parseEther("1000000"))).wait();
-        await (await dmcToken.connect(signers[16]).approve(await gwtToken.getAddress(), ethers.parseEther("1000000"))).wait();
-        await (await gwtToken.connect(signers[16]).exchange(ethers.parseEther("1000000"))).wait();
+        await (await dmcToken.connect(signers[16]).approve(await exchange.getAddress(), ethers.parseEther("1000000"))).wait();
+        await (await exchange.connect(signers[16]).exchangeGWT(ethers.parseEther("1000000"))).wait();
         await (await gwtToken.connect(signers[16]).approve(await contract.getAddress(), ethers.parseEther("210000000"))).wait();
     });
 
@@ -177,8 +187,8 @@ describe("PublicDataStorage", function () {
         expect((await gwtToken.balanceOf(signers[17].address))).to.equal(ethers.parseEther("0"));
 
         await (await dmcToken.transfer(await signers[17].address, ethers.parseEther("1"))).wait();
-        await (await dmcToken.connect(signers[17]).approve(await gwtToken.getAddress(), ethers.parseEther("1"))).wait();
-        await (await gwtToken.connect(signers[17]).exchange(ethers.parseEther("1"))).wait();
+        await (await dmcToken.connect(signers[17]).approve(await exchange.getAddress(), ethers.parseEther("1"))).wait();
+        await (await exchange.connect(signers[17]).exchangeGWT(ethers.parseEther("1"))).wait();
         await (await gwtToken.connect(signers[17]).approve(await contract.getAddress(), ethers.parseEther("210"))).wait();
         
         expect((await gwtToken.balanceOf(signers[17].address))).to.equal(ethers.parseEther("210"));
@@ -200,41 +210,41 @@ describe("PublicDataStorage", function () {
             .emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("10000"), 0);
     });
 
-    async function showData(signer: HardhatEthersSigner): Promise<ContractTransactionResponse> {
+    async function showData(signer: HardhatEthersSigner): Promise<[Promise<ContractTransactionResponse>, number]> {
         let nonce_block = await ethers.provider.getBlockNumber();
         await mine();
 
         let [min_index, path, leaf, proof] = await generateProof(TestDatas[0].data_file_path, nonce_block, TestDatas[0].merkle_file_path);
-        let tx = contract.connect(signer).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf);
-        await expect(tx).emit(contract, "ShowDataProof").withArgs(signer.address, TestDatas[0].hash, nonce_block, min_index, proof);
+        let tx = contract.connect(signer).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf, 0);
+        await expect(tx).emit(contract, "ShowDataProof").withArgs(signer.address, TestDatas[0].hash, nonce_block);
 
-        return tx;
+        let proofInfo = await contract.getDataProof(TestDatas[0].hash, nonce_block);
+        expect(proofInfo.proofResult).to.be.equal(ethers.hexlify(proof))
+
+        return [tx, nonce_block];
     }
 
-    it("show data", async () => {
+    it("show data and withdraw", async () => {
         // 这个操作会锁定signers[2]的余额 1/8 GB * 24(周) * 64(倍) = 192 GWT
-        let tx = await showData(signers[2]);
+        let [tx, nonce_block] = await showData(signers[2]);
         await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9808"), ethers.parseEther("192"));
-            
-    });
 
-    it("show data on same block");
+        await mine(await contract.sysConfigShowTimeout());
 
-    it("show data again", async() => {
-        await mine(720);
-
-        let tx = await showData(signers[3]);
-        await expect(tx)
-            .emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("149.44"))
-            .emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("9808"), ethers.parseEther("192"));
 
         // signers[2]得到奖励, 奖励从data[0]的余额里扣除
-        // 得到的奖励：1494.4 * 0.1 * 0.8 = 119.552
+        // 得到的奖励：1494.4 * 0.1 = 149.44
         // 余额扣除：1494.4 * 0.1 = 149.44
-        await expect(tx).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("119.552"))
+        let tx2 = contract.connect(signers[2]).withdrawShow(TestDatas[0].hash, nonce_block);
+        await expect(tx2).emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("149.44"))
+        await expect(tx2).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("149.44"))
         expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("1344.96"));
+    });
 
-        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[2].address, signers[3].address, ethers.ZeroAddress, ethers.ZeroAddress, ethers.ZeroAddress]);
+    it("show data again", async() => {
+        let [tx] = await showData(signers[3]);
+        await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("9808"), ethers.parseEther("192"));
+        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[2].address, signers[3].address]);
     });
 
     it("several suppliers show data", async () => {
@@ -251,21 +261,22 @@ describe("PublicDataStorage", function () {
     });
 
     it("suppliers withdraw cycle reward", async () => {
-        await mine(17280);
+        await mine(await contract.blocksPerCycle());
 
-        // 奖池数量：373.6, 本期可分配：373.6 * 0.8 = 298.88
-        // data[0]可分到298.88 * 240 / 1600 = 44.832
-        // owner获得44.832*0.2=8.9664
+        // 奖池数量：84527.2, 本期可分配：84527.2 * 0.8 = 67,621.76
+        // data[0]可分到67,621.76 * 240 / 1600 = 10,143.264
+        // owner获得10143.264*0.2=2028.6528
+        //let cycleInfo = await contract.getCycleInfo(1);
         await expect(contract.connect(signers[0]).withdrawAward(1, TestDatas[0].hash))
-            .changeTokenBalance(gwtToken, signers[0], ethers.parseEther("8.9664"));
-        // sponser获得44.832*0.5 = 22.416
+            .changeTokenBalance(gwtToken, signers[0], ethers.parseEther("2028.6528"));
+        // sponser获得10143.264*0.5 = 5071.632
         await expect(contract.connect(signers[1]).withdrawAward(1, TestDatas[0].hash))
-            .changeTokenBalance(gwtToken, signers[1], ethers.parseEther("22.416"));
+            .changeTokenBalance(gwtToken, signers[1], ethers.parseEther("5071.632"));
         
-        // signers3-7每人获得44.832*0.3/5 = 2.68992
+        // signers3-7每人获得10143.264*0.3/5 = 608.59584
         for (let index = 3; index <= 7; index++) {
             await expect(contract.connect(signers[index]).withdrawAward(1, TestDatas[0].hash))
-                .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("2.68992"));
+                .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("608.59584"));
         }
     });
 });

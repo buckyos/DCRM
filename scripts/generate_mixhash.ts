@@ -10,20 +10,15 @@ export function generateMixHash(filePath: string, type: HashType, treeStorePath:
     let buf = new Uint8Array(1024);
     let begin = 0;
     let tree = new MerkleTree(type);
-    process.stdout.write("begin read file\n");
     while (true) {
-        process.stdout.clearLine(0);
-        process.stdout.cursorTo(0);
         buf.fill(0);
         let n = fs.readSync(file_op, buf);
         if (n == 0) {
             break;
         }
         begin += n;
-        process.stdout.write(`reading file: ${begin}/${length}`);
         tree.addLeaf(buf);
     }
-    console.log("calcuteing tree...")
     tree.calcTree();
     let root_hash = tree.getRoot();
   
@@ -77,18 +72,3 @@ export function getSize(mixedHashHex: string): number {
 
     return Number(size);
 }
-
-let test_file_path = "C:\\TDDOWNLOAD\\MTool_8C34B84D.zip";
-let hash_type = HashType.Keccak256;
-
-async function run(filepath: string, type: HashType) {
-    if (!fs.existsSync("merkleData")) {
-        fs.mkdirSync("merkleData");
-    }
-    let merkle_store_path = path.join("merkleData", path.basename(filepath) + ".json");
-    
-    let root_hash = generateMixHash(filepath, type, merkle_store_path);
-    console.log("root_hash: ", ethers.hexlify(root_hash));
-}
-
-//run(test_file_path, hash_type).then(() => {process.exit(0)})
