@@ -1,19 +1,39 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./dmc.sol";
 
-contract GWTToken is ERC20, Ownable {
-    DMCToken dmcToken;
+contract GWTToken is ERC20Burnable, Ownable {
     mapping (address => bool) allow_transfer;
+    mapping (address => bool) allow_minter;
 
-    // 这种兑换币，是不是需要设定一个最大上限？
-    constructor(address _dmcToken) ERC20("Gb storage per Week Token", "GWT") Ownable(msg.sender) {
-        dmcToken = DMCToken(_dmcToken);
+    constructor() ERC20("Gb storage per Week Token", "GWT") Ownable(msg.sender) {
         // enable mint and burn
         allow_transfer[address(0)] = true;
+    }
+
+    modifier onlyMinter() {
+        require(allow_minter[msg.sender], "mint not allowed");
+        _;
+    }
+
+    modifier canTransfer(address sender, address to) {
+        require(allow_transfer[sender] || allow_transfer[to], "transfer not allowed");
+        _;
+    }
+
+    function enableMinter(address[] calldata addresses) public onlyOwner {
+        for (uint i = 0; i < addresses.length; i++) {
+            allow_minter[addresses[i]] = true;
+        }
+    }
+
+    function disableMinter(address[] calldata addresses) public onlyOwner {
+        for (uint i = 0; i < addresses.length; i++) {
+            allow_minter[addresses[i]] = false;
+        }
     }
 
     function enableTransfer(address[] calldata addresses) public onlyOwner {
@@ -28,35 +48,11 @@ contract GWTToken is ERC20, Ownable {
         }
     }
 
-    function _calcGWTAmount(uint256 dmc_amount) internal pure returns(uint256) {
-        // 1 : 210
-        return dmc_amount * 210;
+    function mint(address to, uint256 amount) public onlyMinter {
+        _mint(to, amount);
     }
 
-    function _calcDMCAmount(uint256 gwt_amount) internal pure returns(uint256) {
-        // 210 : 1
-        return gwt_amount / 210;
-    }
-
-    function _update(address sender, address to, uint256 amount) internal override {
-        require(allow_transfer[sender] || allow_transfer[to], "transfer not allowed");
+    function _update(address sender, address to, uint256 amount) internal override canTransfer(sender, to) {
         super._update(sender, to, amount);
-    }
-
-
-    //REVIEW 把兑换合约独立出去，GWT合约只需要认兑换合约（而不是认DMC合约）就可以。
-    //  兑换合约是可升级逻辑的。
-    function exchange(uint256 amount) public {        
-        uint256 gwtAmount = _calcGWTAmount(amount);
-        
-        dmcToken.transferFrom(msg.sender, address(this), amount);
-        _mint(msg.sender, gwtAmount);
-    }
-
-    function burn(uint256 amount) public {
-        uint256 dmcAmount = _calcDMCAmount(amount);
-
-        dmcToken.transfer(msg.sender, dmcAmount);
-        _burn(msg.sender, amount);
     }
 }

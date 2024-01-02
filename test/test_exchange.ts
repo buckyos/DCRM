@@ -1,35 +1,45 @@
-import { ethers } from "hardhat"
-import { DMCToken, GWTToken } from "../typechain-types"
+import { ethers, upgrades } from "hardhat"
+import { DMCToken, Exchange, GWTToken } from "../typechain-types"
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from "chai";
 
 describe("Exchange", function () {
     let dmc: DMCToken
     let gwt: GWTToken
+    let exchange: Exchange
     let signers: HardhatEthersSigner[];
 
     before(async () => {
         signers = await ethers.getSigners()
 
         dmc = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
-        let dmcAddr = await dmc.getAddress();
-        gwt = await (await ethers.deployContract("GWTToken", [dmcAddr])).waitForDeployment()
+        gwt = await (await ethers.deployContract("GWTToken")).waitForDeployment()
+        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
+            [await dmc.getAddress(), await gwt.getAddress()], 
+            {
+                initializer: "initialize",
+                kind: "uups",
+                timeout: 0
+            })).waitForDeployment() as unknown as Exchange;
+
+        await (await gwt.enableMinter([await exchange.getAddress()])).wait();
 
         await (await dmc.transfer(signers[1].address, ethers.parseEther("1000"))).wait()
     })
 
     it("exchange dmc to gwt", async () => {
         expect(await dmc.balanceOf(signers[1].address)).to.equal(ethers.parseEther("1000"))
-        let gwtAddr = await gwt.getAddress();
-        await expect(dmc.connect(signers[1]).approve(gwtAddr, ethers.parseEther("1")))
-            .emit(dmc, "Approval").withArgs(signers[1].address, gwtAddr, ethers.parseEther("1"))
+        let exchangeAddr = await exchange.getAddress();
 
-        await expect(gwt.connect(signers[1]).exchange(ethers.parseEther("1")))
+        await expect(dmc.connect(signers[1]).approve(exchangeAddr, ethers.parseEther("1")))
+            .emit(dmc, "Approval").withArgs(signers[1].address, exchangeAddr, ethers.parseEther("1"))
+
+        await expect(exchange.connect(signers[1]).exchangeGWT(ethers.parseEther("1")))
             .emit(gwt, "Transfer").withArgs(ethers.ZeroAddress, signers[1].address, ethers.parseEther("210"))
         
         expect(await gwt.balanceOf(signers[1].address)).to.equal(ethers.parseEther("210"))
         expect(await dmc.balanceOf(signers[1].address)).to.equal(ethers.parseEther("999"))
-        expect(await dmc.balanceOf(gwtAddr)).to.equal(ethers.parseEther("1"))
+        expect(await dmc.balanceOf(exchangeAddr)).to.equal(ethers.parseEther("1"))
     })
 
     it("unregistered transfer will be reverted", async () => {
@@ -55,10 +65,19 @@ describe("Exchange", function () {
     })
 
     it("burn", async () => {
-        await expect(gwt.connect(signers[1]).burn(ethers.parseEther("210")))
+        let exchangeAddr = await exchange.getAddress();
+
+        await expect(gwt.connect(signers[1]).approve(exchangeAddr, ethers.parseEther("210")))
+            .emit(gwt, "Approval").withArgs(signers[1].address, exchangeAddr, ethers.parseEther("210"))
+
+        await expect(exchange.connect(signers[1]).exchangeDMC(ethers.parseEther("210")))
             .emit(gwt, "Transfer").withArgs(signers[1].address, ethers.ZeroAddress, ethers.parseEther("210"))
 
         expect(await gwt.balanceOf(signers[1].address)).to.equal(0)
         expect(await dmc.balanceOf(signers[1].address)).to.equal(ethers.parseEther("1000"))
+    });
+
+    it("mint disallowed", async () => {
+        await expect(gwt.connect(signers[1]).mint(signers[1].address, ethers.parseEther("1"))).revertedWith("mint not allowed");
     });
 })
