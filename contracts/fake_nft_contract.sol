@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "./public_data_storage.sol";
 
-contract FakeNFTContract is IERCPublicDataContract, IERC721VerfiyDataHash {
+contract FakeNFTContract is IERCPublicDataContract, IERC721VerifyDataHash {
     mapping (uint256 => bytes32) public tokenDataHashes;
     mapping (bytes32 => address) public dataOwners;
 

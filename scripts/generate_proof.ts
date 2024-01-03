@@ -3,6 +3,19 @@ import fs from "node:fs"
 import { MerkleTree } from "./ERCMerkleTree";
 import { compareBytes } from "./ERCMerkleTreeUtil";
 
+export async function genProofByIndex(filepath: string, index: number, treeStorePath: string): Promise<[number, Uint8Array[], Uint8Array, Uint8Array]> {
+    let tree = MerkleTree.load(JSON.parse(fs.readFileSync(treeStorePath, {encoding: 'utf-8'})));
+    let file_op = fs.openSync(filepath, "r");
+
+    let buf = new Uint8Array(1024);
+    buf.fill(0);
+
+    fs.readSync(file_op, buf, {position: index * 1024});
+    let path = tree.getPath(index);
+
+    return [index, path, buf, tree.proofByPath(path, index, buf)];
+}
+
 export async function generateProof(filepath: string, nonce_block_height: number, treeStorePath: string): Promise<[number, Uint8Array[], Uint8Array, Uint8Array]> {
     let tree = MerkleTree.load(JSON.parse(fs.readFileSync(treeStorePath, {encoding: 'utf-8'})));
 

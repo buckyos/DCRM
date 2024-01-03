@@ -76,6 +76,28 @@ describe("PublicDataStorage", function () {
         await (await gwtToken.connect(signers[16]).approve(await contract.getAddress(), ethers.parseEther("210000000"))).wait();
     });
 
+    it("set sys config", async () => {
+        let config = await contract.sysConfig();
+        let setConfig: PublicDataStorage.SysConfigStruct = {
+            minDepositRatio: config.minDepositRatio,
+            minPublicDataStorageWeeks: config.minPublicDataStorageWeeks,
+            minLockWeeks: config.minLockWeeks,
+            blocksPerCycle: config.blocksPerCycle,
+            topRewards: config.topRewards,
+            lockAfterShow: config.lockAfterShow,
+            showTimeout: config.showTimeout,
+            maxNonceBlockDistance: config.maxNonceBlockDistance,
+            minRankingScore: config.minRankingScore,
+            minDataSize: config.minDataSize
+        };
+        setConfig.showTimeout = 720n;
+        setConfig.minRankingScore = 1n;
+        await (await contract.setSysConfig(setConfig)).wait();
+
+        expect((await contract.sysConfig()).showTimeout).to.equal(720);
+    })
+
+    
     it("create public data", async () => {
         // 需要的最小抵押：1/8 GB * 96(周) * 64(倍) = 768 GWT
         await expect(contract.createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
@@ -229,7 +251,7 @@ describe("PublicDataStorage", function () {
         let [tx, nonce_block] = await showData(signers[2]);
         await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9808"), ethers.parseEther("192"));
 
-        await mine(await contract.sysConfigShowTimeout());
+        await mine((await contract.sysConfig()).showTimeout);
 
 
         // signers[2]得到奖励, 奖励从data[0]的余额里扣除
@@ -242,8 +264,12 @@ describe("PublicDataStorage", function () {
     });
 
     it("show data again", async() => {
-        let [tx] = await showData(signers[3]);
+        let [tx, nonce] = await showData(signers[3]);
         await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("9808"), ethers.parseEther("192"));
+
+        // 要提现后，cycle数据才更新
+        await mine((await contract.sysConfig()).showTimeout);
+        await contract.connect(signers[3]).withdrawShow(TestDatas[0].hash, nonce);
         expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[2].address, signers[3].address]);
     });
 
@@ -252,30 +278,31 @@ describe("PublicDataStorage", function () {
         for (let i = 4; i < 8; i++){
             await (expect(contract.connect(signers[i]).pledgeGwt(ethers.parseEther("10000"))))
                 .emit(contract, "SupplierBalanceChanged").withArgs(signers[i].address, ethers.parseEther("10000"), 0);
-
-            await mine(720);
-            await showData(signers[i]);
+            let [tx, nonce] = await showData(signers[i]);
+            await mine((await contract.sysConfig()).showTimeout);
+            await (await contract.connect(signers[i]).withdrawShow(TestDatas[0].hash, nonce));
         }
          
         expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[7].address, signers[3].address, signers[4].address, signers[5].address, signers[6].address]);
     });
 
     it("suppliers withdraw cycle reward", async () => {
-        await mine(await contract.blocksPerCycle());
+        await mine((await contract.sysConfig()).blocksPerCycle);
 
         // 奖池数量：84527.2, 本期可分配：84527.2 * 0.8 = 67,621.76
         // data[0]可分到67,621.76 * 240 / 1600 = 10,143.264
         // owner获得10143.264*0.2=2028.6528
         //let cycleInfo = await contract.getCycleInfo(1);
-        await expect(contract.connect(signers[0]).withdrawAward(1, TestDatas[0].hash))
+        let tx = contract.connect(signers[0]).withdrawAward(1, TestDatas[0].hash);
+        await expect(tx)
             .changeTokenBalance(gwtToken, signers[0], ethers.parseEther("2028.6528"));
         // sponser获得10143.264*0.5 = 5071.632
-        await expect(contract.connect(signers[1]).withdrawAward(1, TestDatas[0].hash))
+        await expect(tx)
             .changeTokenBalance(gwtToken, signers[1], ethers.parseEther("5071.632"));
         
         // signers3-7每人获得10143.264*0.3/5 = 608.59584
         for (let index = 3; index <= 7; index++) {
-            await expect(contract.connect(signers[index]).withdrawAward(1, TestDatas[0].hash))
+            await expect(tx)
                 .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("608.59584"));
         }
     });

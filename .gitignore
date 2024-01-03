@@ -30,3 +30,4 @@ node_modules
 
 # solidity-coverage files
 /abi/
+/testDatas/

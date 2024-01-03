@@ -4,6 +4,8 @@ import "./gwt.sol";
 import "./sortedlist.sol";
 import "./PublicDataProof.sol";
 
+import "@openzeppelin/contracts/access/Ownable.sol";
+
 import "hardhat/console.sol";
 
 using SortedScoreList for SortedScoreList.List;
@@ -14,7 +16,7 @@ interface IERCPublicDataContract {
     function getDataOwner(bytes32 dataHash) external view returns (address);
 }
 
-interface IERC721VerfiyDataHash{
+interface IERC721VerifyDataHash{
     //return token data hash
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
 }
@@ -32,7 +34,7 @@ interface IERC721VerfiyDataHash{
  * 可能有精度损失？
  */
 
-contract PublicDataStorage {
+contract PublicDataStorage is Ownable {
     enum ShowType { Normal, Immediately }
     struct PublicData {
         address owner;
@@ -70,13 +72,11 @@ contract PublicDataStorage {
 
     struct CycleDataInfo {
         address[] lastShowers;
-        uint64 score;//REVIEW uint64足够了？
+        uint64 score;// score = 0表示已经提现过了
         uint8 showerIndex;
-        uint8 withdrawStatus;
     }
 
     struct CycleInfo {
-        //Review：没必要每个Cycle都保存吧？可以合并到PublicData里，
         mapping(bytes32 => CycleDataInfo) dataInfos; 
 
         SortedScoreList.List scoreList;
@@ -94,19 +94,21 @@ contract PublicDataStorage {
     uint256 _startBlock;
     uint64 _minRankingScore;
 
-    // 合约常量参数
-    uint256 sysMinDepositRatio = 64;
-    uint256 sysMinPublicDataStorageWeeks = 96;
-    uint256 sysMinLockWeeks = 24;
+    struct SysConfig {
+        uint32 minDepositRatio;
+        uint32 minPublicDataStorageWeeks;
+        uint32 minLockWeeks;
+        uint32 blocksPerCycle;
+        uint32 topRewards;
+        uint32 lockAfterShow;
+        uint32 showTimeout;
+        uint32 maxNonceBlockDistance;
+        uint64 minRankingScore;
+        uint64 minDataSize;
+    }
 
-    uint256 constant public blocksPerCycle = 17280;
-    uint256 constant public topRewards = 32;
-    uint256 constant public sysLockAfterShow = 11520;    // REVIEW 成功的SHOW 48小时之后才能提现
-    uint256 constant public sysConfigShowTimeout = 5760; // REVIEW SHOW成功24小时之内允许挑战
-    uint256 constant public syxMaxNonceBlockDistance = 2;  // 允许的nonce block距离, maxNonceBlockDistance要小于256
-    //uint256 constant public difficulty = 4;   // POW难度，最后N个bit为0
-    uint256 constant public totalRewardScore = 1600; // 将rewardScores相加得到的结果
-    uint64 constant public sysMinDataSize = 1 << 27; // dataSize换算GWT时，最小值为128M
+    SysConfig public sysConfig;
+    uint256 constant totalRewardScore = 1600;
 
     event SupplierBalanceChanged(address supplier, uint256 avalibleBalance, uint256 lockedBalance);
     event GWTStacked(address supplier, uint256 amount);
@@ -114,13 +116,14 @@ contract PublicDataStorage {
     event PublicDataCreated(bytes32 mixedHash);
     event DepositData(address depositer, bytes32 mixedHash, uint256 balance, uint256 reward);
     event SponsorChanged(bytes32 mixedHash, address oldSponsor, address newSponsor);
-    event DataScoreUpdated(bytes32 mixedHash, uint256 cycle, uint64 score);
+    // event DataScoreUpdated(bytes32 mixedHash, uint256 cycle, uint64 score);
+    event DataPointAdded(bytes32 mixedHash, uint64 point);
     event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
-    event SupplierPubished(address supplier, bytes32 mixedHash, uint256 amount);
+    event SupplierPunished(address supplier, bytes32 mixedHash, uint256 amount);
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block);
-    event WithdrawAward(bytes32 mixedHash, address user, uint256 amount);
+    event WithdrawAward(bytes32 mixedHash, uint256 cycle);
 
-    constructor(address _gwtToken, address _Foundation) {
+    constructor(address _gwtToken, address _Foundation) Ownable(msg.sender) {
         gwtToken = GWTToken(_gwtToken);
         _startBlock = block.number;
         _currectCycle = 0;
@@ -128,9 +131,26 @@ contract PublicDataStorage {
         // 测试时先改成1
         _minRankingScore = 1;
         foundationAddress = _Foundation;
+
+        // 设置初始参数
+        sysConfig.minDepositRatio = 64;             // create data时最小为64倍
+        sysConfig.minPublicDataStorageWeeks = 96;   // create data时最小为96周
+        sysConfig.minLockWeeks = 24;                // show的时候最小为24周，目前固定为最小值
+        sysConfig.blocksPerCycle = 17280;           // 每个cycle为72小时
+        sysConfig.topRewards = 32;                  // top 32名进榜
+        sysConfig.lockAfterShow = 11520;            // show成功后48小时内才能解锁
+        sysConfig.showTimeout = 5760;               // show之后24小时允许挑战
+        sysConfig.maxNonceBlockDistance = 2;        // 允许的nonce block距离, 要小于256
+        sysConfig.minRankingScore = 64;             // 最小的排名分数
+        sysConfig.minDataSize = 1 << 27;            // dataSize换算GWT时，最小值为128M
     }
 
-    function _getRewardScore(uint256 ranking) internal pure returns(uint256) {
+    function setSysConfig(SysConfig calldata config) public onlyOwner {
+        // 这个函数调用频率很低，直接整个set了
+        sysConfig = config;
+    }
+
+    function _getRewardScore(uint256 ranking) internal pure returns(uint8) {
         uint8[32] memory rewardScores = [
             240, 180, 150, 120, 100, 80, 60, 53, 42, 36,
             35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 
@@ -143,14 +163,9 @@ contract PublicDataStorage {
         }
     }
 
-    function _verifyBlockNumber(bytes32 dataMixedHash, uint256 blockNumber) internal pure returns(bool) {
-        // (blockNumber xor dataMixedHash) % 64 == 0
-        return uint256(bytes32(blockNumber) ^ dataMixedHash) % 64 == 0;
-    }
-
-    function _cycleNumber(uint256 blockNumber, uint256 startBlock) internal pure returns(uint256) {
-        uint cycleNumber = (blockNumber - startBlock) / blocksPerCycle;
-        if (cycleNumber * blocksPerCycle + startBlock < blockNumber) {
+    function _cycleNumber(uint256 blockNumber, uint256 startBlock) internal view returns(uint256) {
+        uint cycleNumber = (blockNumber - startBlock) / sysConfig.blocksPerCycle;
+        if (cycleNumber * sysConfig.blocksPerCycle + startBlock < blockNumber) {
             cycleNumber += 1;
         }
         return cycleNumber;
@@ -183,10 +198,10 @@ contract PublicDataStorage {
 
     // 计算这些空间对应多少GWT，单位是wei
     // 不满128MB的按照128MB计算
-    function _dataSizeToGWT(uint64 dataSize) internal pure returns(uint256) {
+    function _dataSizeToGWT(uint64 dataSize) internal view returns(uint256) {
         uint64 fixedDataSize = dataSize;
-        if (fixedDataSize < sysMinDataSize) {
-            fixedDataSize = sysMinDataSize;
+        if (fixedDataSize < sysConfig.minDataSize) {
+            fixedDataSize = sysConfig.minDataSize;
         }
         return (uint256(fixedDataSize) * 10 ** 18) >> 30;
     }
@@ -199,12 +214,12 @@ contract PublicDataStorage {
         uint256 tokenId
     ) public {
         // 质押率影响用户SHOW数据所需要冻结的质押
-        require(depositRatio >= sysMinDepositRatio, "deposit ratio is too small");
+        require(depositRatio >= sysConfig.minDepositRatio, "deposit ratio is too small");
         require(dataMixedHash != bytes32(0), "data hash is empty");
         // minAmount = 数据大小*GWT兑换比例*最小时长*质押率
         // get data size from data hash
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysMinPublicDataStorageWeeks;
+        uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysConfig.minPublicDataStorageWeeks;
         require(depositAmount >= minAmount, "deposit amount is too small");
         
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
@@ -222,7 +237,7 @@ contract PublicDataStorage {
             // TODO: 这里要考虑一下Owner的粒度： 合约Owner,Collection Owner,Token Owner
             publicDataInfo.nftContract = publicDataContract;
         } else {
-            require(dataMixedHash == IERC721VerfiyDataHash(publicDataContract).tokenDataHash(tokenId), "NFT data hash mismatch");
+            require(dataMixedHash == IERC721VerifyDataHash(publicDataContract).tokenDataHash(tokenId), "NFT data hash mismatch");
             publicDataInfo.nftContract = publicDataContract;
             publicDataInfo.tokenId = tokenId;
         }
@@ -320,7 +335,7 @@ contract PublicDataStorage {
     function _getLockAmountByHash(bytes32 dataMixedHash, ShowType showType) internal view returns(uint256, bool) {
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
         uint256 immediatelyLockAmount = (showType == ShowType.Immediately) ? _publicDatas[dataMixedHash].dataBalance * 2 / 10 : 0;
-        uint256 normalLockAmount = _dataSizeToGWT(dataSize) * _publicDatas[dataMixedHash].depositRatio * sysMinLockWeeks;
+        uint256 normalLockAmount = _dataSizeToGWT(dataSize) * _publicDatas[dataMixedHash].depositRatio * sysConfig.minLockWeeks;
 
         bool isImmediately = immediatelyLockAmount > normalLockAmount;
 
@@ -337,7 +352,7 @@ contract PublicDataStorage {
         require(supplierInfo.avalibleBalance >= lockAmount, "insufficient balance");
         supplierInfo.avalibleBalance -= lockAmount;
         supplierInfo.lockedBalance += lockAmount;
-        supplierInfo.unlockBlock = block.number + sysLockAfterShow;
+        supplierInfo.unlockBlock = block.number + sysConfig.lockAfterShow;
         emit SupplierBalanceChanged(supplierAddress, supplierInfo.avalibleBalance, supplierInfo.lockedBalance);
         return (lockAmount, isImmediately);
     }
@@ -390,12 +405,36 @@ contract PublicDataStorage {
     }
 
     function _onProofSuccess(DataProof storage proof,PublicData storage publicDataInfo,bytes32 dataMixedHash) private {
-        
         uint256 reward = publicDataInfo.dataBalance / 10;
         emit SupplierReward(proof.prover, dataMixedHash, reward);
         if (reward > 0) {
             gwtToken.transfer(proof.prover, reward);
             publicDataInfo.dataBalance -= reward;
+        }
+
+        // 更新本cycle的score
+        CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
+        CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
+        
+        // 按文件大小比例增加 ， 0.1G - 1G 1分，1G-4G 2分， 4G-8G 3分，8G-16G 4分 16G-32G 5分 ...  
+        uint64 score = _scoreFromHash(dataMixedHash);
+        dataInfo.score += score;
+
+        //emit DataScoreUpdated(dataMixedHash, _curCycleNumber(), score);
+        emit DataPointAdded(dataMixedHash, score);
+
+        // 合约里不关注的数据先不记录了，省gas
+        //publicDataInfo.point += score;
+        
+        // 更新cycle的last shower
+        _updateLastSupplier(dataInfo, address(0), msg.sender);
+
+        //只有超过阈值才会更新排名，这个设定会导致用户不多的时候排名不满（强制性累积奖金）
+        if (dataInfo.score > _minRankingScore) {
+            if (cycleInfo.scoreList.maxlen() < sysConfig.topRewards) {
+                cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
+            }
+            cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
         }
     }
 
@@ -409,9 +448,9 @@ contract PublicDataStorage {
         DataProof storage proof = _publicDataProofs[proofKey];
 
         require(proof.proofBlockHeight > 0, "proof not exist");
-        require(block.number - proof.proofBlockHeight > sysConfigShowTimeout, "proof not unlock");
+        require(block.number - proof.proofBlockHeight > sysConfig.showTimeout, "proof not unlock");
 
-        if (block.number - proof.proofBlockHeight > sysConfigShowTimeout) {
+        if (block.number - proof.proofBlockHeight > sysConfig.showTimeout) {
             //Last Show Proof successed! 获得奖励+增加积分
             PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
             _onProofSuccess(proof, publicDataInfo,dataMixedHash);
@@ -429,10 +468,10 @@ contract PublicDataStorage {
         address supplier = msg.sender;
 
         if(proof.proofBlockHeight == 0) {
-            require(block.number - nonce_block <= syxMaxNonceBlockDistance, "invalid nonce block");
+            require(block.number - nonce_block <= sysConfig.maxNonceBlockDistance, "invalid nonce block");
             isNewShow = true;
         } else {
-            require(block.number - proof.proofBlockHeight <= sysConfigShowTimeout, "challenge timeout");
+            require(block.number - proof.proofBlockHeight <= sysConfig.showTimeout, "challenge timeout");
         }
     
         (bytes32 root_hash,) = _verifyDataProof(dataMixedHash,nonce_block,index,m_path,leafdata);
@@ -453,30 +492,6 @@ contract PublicDataStorage {
                 _onProofSuccess(proof, publicDataInfo, dataMixedHash);
             }
 
-            // 更新本cycle的score
-            CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
-            CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
-            
-            // 按文件大小比例增加 ， 0.1G - 1G 1分，1G-4G 2分， 4G-8G 3分，8G-16G 4分 16G-32G 5分 ...  
-            uint64 score = _scoreFromHash(dataMixedHash);
-            dataInfo.score += score;
-
-            emit DataScoreUpdated(dataMixedHash, _curCycleNumber(), score);
-
-            // 合约里不关注的数据先不记录了，省gas
-            //publicDataInfo.point += score;
-            
-            // 更新cycle的last shower
-            _updateLastSupplier(dataInfo, address(0), msg.sender);
-
-            //只有超过阈值才会更新排名，这个设定会导致用户不多的时候排名不满（强制性累积奖金）
-            if (dataInfo.score > _minRankingScore) {
-                if (cycleInfo.scoreList.maxlen() < topRewards) {
-                    cycleInfo.scoreList.setMaxLen(topRewards);
-                }
-                cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
-            }
-
         } else {
             // 已经有挑战存在：判断是否结果更好，如果更好，更新结果，并更新区块高度
             if(root_hash < proof.proofResult) {
@@ -486,7 +501,7 @@ contract PublicDataStorage {
                 gwtToken.transfer(msg.sender, awardFromPunish);
                 gwtToken.transfer(foundationAddress, proof.lockedAmount - awardFromPunish);
                 
-                emit SupplierPubished(proof.prover, dataMixedHash, proof.lockedAmount);
+                emit SupplierPunished(proof.prover, dataMixedHash, proof.lockedAmount);
                 emit SupplierBalanceChanged(proof.prover, _supplierInfos[proof.prover].avalibleBalance, _supplierInfos[proof.prover].lockedBalance);
 
                 PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
@@ -495,11 +510,6 @@ contract PublicDataStorage {
                 if(isImmediately) {
                     _onProofSuccess(proof, publicDataInfo, dataMixedHash);
                 }
-
-                // 挑战成功，不更新score，因为在第一次show的时候已经更新过了
-                // 替换上次show的last shower
-                CycleDataInfo storage dataInfo = _cycleInfos[_cycleNumber(proof.proofBlockHeight, _startBlock)].dataInfos[dataMixedHash];
-                _updateLastSupplier(dataInfo, proof.prover, msg.sender);
 
                 proof.lockedAmount = lockAmount;
                 proof.proofResult = root_hash;
@@ -556,35 +566,45 @@ contract PublicDataStorage {
         return reward;
     }
 
-    function withdrawAward(uint cycleNumber, bytes32 dataMixedHash) public {
+    function withdrawAward(uint256 cycleNumber, bytes32 dataMixedHash) public {
         // 判断这次的cycle已经结束
         //require(_currectCycle > cycleNumber, "cycle not finish");
-        require(block.number > cycleNumber * blocksPerCycle + _startBlock, "cycle not finish");
+        require(block.number > cycleNumber * sysConfig.blocksPerCycle + _startBlock, "cycle not finish");
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
         //REVIEW:一次排序并保存的GAS和32次内存排序的成本问题？
         uint256 scoreListRanking = cycleInfo.scoreList.getRanking(dataMixedHash);
         require(scoreListRanking > 0, "data not in rank");
 
-        // 看看是谁来取
-        uint8 withdrawUser = _getWithdrawRole(msg.sender, dataMixedHash, _publicDatas[dataMixedHash], dataInfo);
-
-        require(withdrawUser > 0, "cannot withdraw");
-        require(dataInfo.withdrawStatus & withdrawUser == 0, "already withdraw");
+        // 无论谁来取，一次性提取所有奖励，并更新积分
+        require(dataInfo.score > 0, "already withdraw");
 
         // 计算该得到多少奖励
         uint256 totalReward = cycleInfo.totalAward * 8 / 10;
 
-        uint256 data_score = _getRewardScore(scoreListRanking);
+        uint8 score = _getRewardScore(scoreListRanking);
         // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
-        // TODO：多余的奖励是不是可以让基金会提现？只沉淀在合约账户的话，最后要怎么办？
-        uint256 dataReward = totalReward * data_score / totalRewardScore;
-        uint256 reward = _calcuteReward(withdrawUser, dataReward, dataInfo.lastShowers.length);
-        gwtToken.transfer(msg.sender, reward);
+        uint256 dataReward = totalReward * score / totalRewardScore;
+
+        // memory无法创建动态数组和map，直接算一个转一个了
+
+        // owner
+        gwtToken.transfer(_getDataOwner(dataMixedHash, _publicDatas[dataMixedHash]), dataReward / 5);
+
+        // sponser
+        gwtToken.transfer(_publicDatas[dataMixedHash].sponsor, dataReward / 2);
+
+        // last showers
+        uint256 showerReward = (dataReward - dataReward / 2 - dataReward / 5) / dataInfo.lastShowers.length;
+        for (uint8 i = 0; i < dataInfo.lastShowers.length; i++) {
+            gwtToken.transfer(dataInfo.lastShowers[i], showerReward);
+        }
         
         // 设置已取标志
-        dataInfo.withdrawStatus |= withdrawUser;
+        dataInfo.score = 0;
 
-        emit WithdrawAward(dataMixedHash, msg.sender, reward);
+        // 更新积分
+        emit DataPointAdded(dataMixedHash, score);
+        emit WithdrawAward(dataMixedHash, cycleNumber);
     }
 }

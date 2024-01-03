@@ -10,7 +10,6 @@ export enum HashType {
 export function calcHash(buf: Uint8Array, type: HashType): Uint8Array {
     let ret = type == HashType.Sha256 ? ethers.sha256(buf) : ethers.keccak256(buf);
 
-    // 取低16bytes
     return ethers.getBytes(ret);
 }
 
