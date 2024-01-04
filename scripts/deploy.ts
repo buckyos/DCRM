@@ -1,6 +1,6 @@
 import { ethers, network, upgrades } from "hardhat";
 import * as fs from "node:fs";
-import { Exchange } from "../typechain-types";
+import { Exchange, PublicDataStorage } from "../typechain-types";
 
 async function main() {
     const dmcContract = await (await ethers.deployContract("DMCToken", [ethers.parseEther("100000000")])).waitForDeployment();
@@ -35,6 +35,24 @@ async function main() {
     await (await gwtContract.enableMinter([await exchange.getAddress()])).wait();
 
     await(await gwtContract.enableTransfer([publicDataStorageAddress])).wait();
+
+    let config = await publicDataStorage.sysConfig();
+        let setConfig: PublicDataStorage.SysConfigStruct = {
+            minDepositRatio: config.minDepositRatio,
+            minPublicDataStorageWeeks: config.minPublicDataStorageWeeks,
+            minLockWeeks: config.minLockWeeks,
+            blocksPerCycle: config.blocksPerCycle,
+            topRewards: config.topRewards,
+            lockAfterShow: config.lockAfterShow,
+            showTimeout: config.showTimeout,
+            maxNonceBlockDistance: config.maxNonceBlockDistance,
+            minRankingScore: config.minRankingScore,
+            minDataSize: config.minDataSize
+        };
+        setConfig.showTimeout = 720n;
+        setConfig.lockAfterShow = 720n;
+        setConfig.minRankingScore = 1n;
+        await (await publicDataStorage.setSysConfig(setConfig)).wait();
 
     if (network.name !== "hardhat") {
         fs.writeFileSync(`${network.name}-deployed.json`, JSON.stringify({

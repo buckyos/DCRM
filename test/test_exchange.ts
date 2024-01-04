@@ -12,7 +12,7 @@ describe("Exchange", function () {
     before(async () => {
         signers = await ethers.getSigners()
 
-        dmc = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
+        dmc = await (await ethers.deployContract("DMCToken", [ethers.parseEther("1000000000")])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWTToken")).waitForDeployment()
         exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
             [await dmc.getAddress(), await gwt.getAddress()], 
@@ -23,9 +23,19 @@ describe("Exchange", function () {
             })).waitForDeployment() as unknown as Exchange;
 
         await (await gwt.enableMinter([await exchange.getAddress()])).wait();
+        await (await dmc.enableMinter([await exchange.getAddress()])).wait();
 
-        await (await dmc.transfer(signers[1].address, ethers.parseEther("1000"))).wait()
+        // await (await dmc.transfer(signers[1].address, ethers.parseEther("1000"))).wait()
     })
+
+    it("mint dmc", async () => {
+        await expect(exchange.connect(signers[0]).mintDMC(ethers.ZeroHash, []))
+            .emit(dmc, "Transfer").withArgs(ethers.ZeroAddress, signers[0].address, ethers.parseEther("210"));
+
+        // 为了测试，将signers[0]直接加入dmc的minter，并给signers[1] mint 1000 dmc
+        await (await dmc.enableMinter([signers[0].address])).wait();
+        await (await dmc.connect(signers[0]).mint(signers[1].address, ethers.parseEther("1000"))).wait()
+    });
 
     it("exchange dmc to gwt", async () => {
         expect(await dmc.balanceOf(signers[1].address)).to.equal(ethers.parseEther("1000"))

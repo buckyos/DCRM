@@ -91,6 +91,7 @@ describe("PublicDataStorage", function () {
             minDataSize: config.minDataSize
         };
         setConfig.showTimeout = 720n;
+        setConfig.lockAfterShow = 720n;
         setConfig.minRankingScore = 1n;
         await (await contract.setSysConfig(setConfig)).wait();
 
@@ -232,12 +233,12 @@ describe("PublicDataStorage", function () {
             .emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("10000"), 0);
     });
 
-    async function showData(signer: HardhatEthersSigner): Promise<[Promise<ContractTransactionResponse>, number]> {
+    async function showData(signer: HardhatEthersSigner, showType: number): Promise<[Promise<ContractTransactionResponse>, number]> {
         let nonce_block = await ethers.provider.getBlockNumber();
         await mine();
 
         let [min_index, path, leaf, proof] = await generateProof(TestDatas[0].data_file_path, nonce_block, TestDatas[0].merkle_file_path);
-        let tx = contract.connect(signer).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf, 0);
+        let tx = contract.connect(signer).showData(TestDatas[0].hash, nonce_block, min_index, path, leaf, showType);
         await expect(tx).emit(contract, "ShowDataProof").withArgs(signer.address, TestDatas[0].hash, nonce_block);
 
         let proofInfo = await contract.getDataProof(TestDatas[0].hash, nonce_block);
@@ -246,31 +247,38 @@ describe("PublicDataStorage", function () {
         return [tx, nonce_block];
     }
 
+    it("show data immediately", async () => {
+        // Normal情况下，会锁定192 GWT，当balance / 10 * 2 > 192，即balance > 960时，才会有immediately show
+        let [tx, nonce_block] = await showData(signers[2], 1);
+        await expect(tx)
+            .emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9701.12"), ethers.parseEther("298.88"))
+            .emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("149.44"));
+        await expect(tx).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("149.44"));
+    });
+
     it("show data and withdraw", async () => {
         // 这个操作会锁定signers[2]的余额 1/8 GB * 24(周) * 64(倍) = 192 GWT
-        let [tx, nonce_block] = await showData(signers[2]);
-        await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9808"), ethers.parseEther("192"));
+        let [tx, nonce_block] = await showData(signers[2], 0);
+        await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[2].address, ethers.parseEther("9509.12"), ethers.parseEther("490.88"));
 
         await mine((await contract.sysConfig()).showTimeout);
 
-
         // signers[2]得到奖励, 奖励从data[0]的余额里扣除
-        // 得到的奖励：1494.4 * 0.1 = 149.44
-        // 余额扣除：1494.4 * 0.1 = 149.44
+        // 得到的奖励：1494.4 * 0.9 * 0.1 = 134.496
         let tx2 = contract.connect(signers[2]).withdrawShow(TestDatas[0].hash, nonce_block);
-        await expect(tx2).emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("149.44"))
-        await expect(tx2).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("149.44"))
-        expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("1344.96"));
+        await expect(tx2).emit(contract, "SupplierReward").withArgs(signers[2].address, TestDatas[0].hash, ethers.parseEther("134.496"))
+        await expect(tx2).changeTokenBalance(gwtToken, signers[2].address, ethers.parseEther("134.496"))
+        expect(await contract.dataBalance(TestDatas[0].hash)).to.equal(ethers.parseEther("1210.464"));
     });
 
     it("show data again", async() => {
-        let [tx, nonce] = await showData(signers[3]);
+        let [tx, nonce] = await showData(signers[3], 0);
         await expect(tx).emit(contract, "SupplierBalanceChanged").withArgs(signers[3].address, ethers.parseEther("9808"), ethers.parseEther("192"));
 
         // 要提现后，cycle数据才更新
         await mine((await contract.sysConfig()).showTimeout);
         await contract.connect(signers[3]).withdrawShow(TestDatas[0].hash, nonce);
-        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[2].address, signers[3].address]);
+        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[2].address, signers[2].address, signers[3].address]);
     });
 
     it("several suppliers show data", async () => {
@@ -278,12 +286,12 @@ describe("PublicDataStorage", function () {
         for (let i = 4; i < 8; i++){
             await (expect(contract.connect(signers[i]).pledgeGwt(ethers.parseEther("10000"))))
                 .emit(contract, "SupplierBalanceChanged").withArgs(signers[i].address, ethers.parseEther("10000"), 0);
-            let [tx, nonce] = await showData(signers[i]);
+            let [tx, nonce] = await showData(signers[i], 0);
             await mine((await contract.sysConfig()).showTimeout);
             await (await contract.connect(signers[i]).withdrawShow(TestDatas[0].hash, nonce));
         }
          
-        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[7].address, signers[3].address, signers[4].address, signers[5].address, signers[6].address]);
+        expect(await contract.getCurrectLastShowed(TestDatas[0].hash)).have.ordered.members([signers[6].address, signers[7].address, signers[3].address, signers[4].address, signers[5].address]);
     });
 
     it("suppliers withdraw cycle reward", async () => {
