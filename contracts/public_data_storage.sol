@@ -3,8 +3,11 @@ pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
 import "./PublicDataProof.sol";
+import "./nft_bridge.sol";
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "hardhat/console.sol";
 
@@ -34,8 +37,10 @@ interface IERC721VerifyDataHash{
  * 可能有精度损失？
  */
 
-contract PublicDataStorage is Ownable {
+contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     enum ShowType { Normal, Immediately }
+    enum BridgeUsage { Force, Perfered, Deny}
+
     struct PublicData {
         address owner;
         address sponsor;
@@ -65,6 +70,8 @@ contract PublicDataStorage is Ownable {
 
     GWTToken public gwtToken;// Gb per Week Token
     address public foundationAddress;
+    NFTBridge public nftBridge;
+    BridgeUsage public bridgeUsage;
 
     mapping(address => SupplierInfo) _supplierInfos;
     mapping(bytes32 => PublicData) _publicDatas;
@@ -103,6 +110,7 @@ contract PublicDataStorage is Ownable {
         uint32 lockAfterShow;
         uint32 showTimeout;
         uint32 maxNonceBlockDistance;
+        uint32 createDepositRatio;
         uint64 minRankingScore;
         uint64 minDataSize;
     }
@@ -123,14 +131,20 @@ contract PublicDataStorage is Ownable {
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block);
     event WithdrawAward(bytes32 mixedHash, uint256 cycle);
 
-    constructor(address _gwtToken, address _Foundation) Ownable(msg.sender) {
+    function initialize(address _gwtToken, address _Foundation, address _nftBridge) public initializer {
+        __PublicDataStorageUpgradable_init(_gwtToken, _Foundation, _nftBridge);
+    }
+
+    function __PublicDataStorageUpgradable_init(address _gwtToken, address _Foundation, address _nftBridge) internal onlyInitializing {
+        __UUPSUpgradeable_init();
+        __Ownable_init(msg.sender);
+
         gwtToken = GWTToken(_gwtToken);
+        nftBridge = NFTBridge(_nftBridge);
         _startBlock = block.number;
         _currectCycle = 0;
-        //_minRankingScore = 64;
-        // 测试时先改成1
-        _minRankingScore = 1;
         foundationAddress = _Foundation;
+        bridgeUsage = BridgeUsage.Force;
 
         // 设置初始参数
         sysConfig.minDepositRatio = 64;             // create data时最小为64倍
@@ -143,6 +157,15 @@ contract PublicDataStorage is Ownable {
         sysConfig.maxNonceBlockDistance = 2;        // 允许的nonce block距离, 要小于256
         sysConfig.minRankingScore = 64;             // 最小的排名分数
         sysConfig.minDataSize = 1 << 27;            // dataSize换算GWT时，最小值为128M
+        sysConfig.createDepositRatio = 5;           // 因为初期推荐使用Immediate Show，这里会设置成5倍，可以让前十几个show都可以立即成立
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+        
+    }
+
+    function setBridgeUsage(BridgeUsage usage) public onlyOwner {
+        bridgeUsage = usage;
     }
 
     function setSysConfig(SysConfig calldata config) public onlyOwner {
@@ -219,7 +242,7 @@ contract PublicDataStorage is Ownable {
         // minAmount = 数据大小*GWT兑换比例*最小时长*质押率
         // get data size from data hash
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysConfig.minPublicDataStorageWeeks;
+        uint256 minAmount = depositRatio * _dataSizeToGWT(dataSize) * sysConfig.minPublicDataStorageWeeks * sysConfig.createDepositRatio;
         require(depositAmount >= minAmount, "deposit amount is too small");
         
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
@@ -230,16 +253,28 @@ contract PublicDataStorage is Ownable {
         publicDataInfo.sponsor = msg.sender;
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
 
-        if (publicDataContract == address(0)) {
-            publicDataInfo.owner = msg.sender;
-        } else if (tokenId == 0) {
-            // token id must be greater than 0
-            // TODO: 这里要考虑一下Owner的粒度： 合约Owner,Collection Owner,Token Owner
-            publicDataInfo.nftContract = publicDataContract;
+        address owner = address(0);
+        if (bridgeUsage != BridgeUsage.Deny) {
+            owner = nftBridge.getOwner(dataMixedHash);
+        }
+
+        // force模式，从桥合约一定能取到值
+        if (bridgeUsage == BridgeUsage.Force) {
+            require(owner != address(0), "data hash not in bridge");
+        }
+
+        // perfered模式，以nftBridge的结果为准
+        if (owner == address(0)) {
+            if (publicDataContract == address(0)) {
+                publicDataInfo.owner = msg.sender;
+            } else {    // 认为publicDataContract是IERC721VerifyDataHash
+                require(dataMixedHash == IERC721VerifyDataHash(publicDataContract).tokenDataHash(tokenId), "NFT data hash mismatch");
+                publicDataInfo.nftContract = publicDataContract;
+                publicDataInfo.tokenId = tokenId;
+            }
         } else {
-            require(dataMixedHash == IERC721VerifyDataHash(publicDataContract).tokenDataHash(tokenId), "NFT data hash mismatch");
-            publicDataInfo.nftContract = publicDataContract;
-            publicDataInfo.tokenId = tokenId;
+            publicDataInfo.nftContract = address(nftBridge);
+            // 不需要设置token id;因为nftBridge是以hash做key的
         }
 
         uint256 balance_add = (depositAmount * 8) / 10;
@@ -523,6 +558,10 @@ contract PublicDataStorage is Ownable {
     }
 
     function _getDataOwner(bytes32 dataMixedHash, PublicData memory publicDataInfo) internal view returns(address) {
+        if (publicDataInfo.nftContract == address(nftBridge)) {
+            return nftBridge.getOwner(dataMixedHash);
+        }
+
         if (publicDataInfo.owner != address(0)) {
             return publicDataInfo.owner;
         } else {
