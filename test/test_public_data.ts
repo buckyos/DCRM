@@ -1,14 +1,21 @@
 import { ethers, upgrades } from "hardhat";
 import { expect } from "chai";
-import { DMCToken, Exchange, FakeNFTContract, GWTToken, PublicDataStorage } from "../typechain-types";
+import { DMCToken, Exchange, GWTToken, NFTBridge, PublicDataStorage } from "../typechain-types";
 
-import * as TestDatas from "../testDatas/test_data.json";
+//import * as TestDatas from "../testDatas/test_data.json";
+import fs from "node:fs";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { ContractTransactionResponse } from "ethers";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
 
 import { generateProof } from "../scripts/generate_proof";
 
+interface TestData {
+    data_file_path: string,
+    merkle_file_path: string,
+    hash: string,
+}
+let TestDatas: TestData[] = JSON.parse(fs.readFileSync("testDatas/test_data.json", { encoding: 'utf-8' }));
 /**
  * 0: data owner
  * 1: data sponser
@@ -26,13 +33,13 @@ describe("PublicDataStorage", function () {
     let gwtToken: GWTToken;
     let exchange: Exchange;
     let signers: HardhatEthersSigner[];
-    let nftContract: FakeNFTContract
+    let nftBridge: NFTBridge
 
     async function deployContracts() {
         let listLibrary = await (await ethers.getContractFactory("SortedScoreList")).deploy();
         let proofLibrary = await (await ethers.getContractFactory("PublicDataProof")).deploy();
 
-        dmcToken = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000")])).waitForDeployment()
+        dmcToken = await (await ethers.deployContract("DMCToken", [ethers.parseEther("10000000"), [signers[0].address], [ethers.parseEther("10000000")]])).waitForDeployment()
         gwtToken = await (await ethers.deployContract("GWTToken")).waitForDeployment()
         exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
             [await dmcToken.getAddress(), await gwtToken.getAddress()], 
@@ -45,12 +52,25 @@ describe("PublicDataStorage", function () {
         await (await gwtToken.enableMinter([await exchange.getAddress()])).wait();
 
         // nftContract = await (await hre.ethers.deployContract("FakeNFTContract")).waitForDeployment();
-        contract = await (await ethers.deployContract("PublicDataStorage", [await gwtToken.getAddress(), signers[19].address], {libraries: {
-            SortedScoreList: await listLibrary.getAddress(),
-            PublicDataProof: await proofLibrary.getAddress()
-        }})).waitForDeployment();
+
+        contract = await (await upgrades.deployProxy(await ethers.getContractFactory("PublicDataStorage", {
+            libraries: {
+                "SortedScoreList": await listLibrary.getAddress(),
+                "PublicDataProof": await proofLibrary.getAddress()
+            }
+        }),
+            [await gwtToken.getAddress(), signers[19].address],
+            {
+                initializer: "initialize",
+                kind: "uups",
+                timeout: 0,
+                unsafeAllow: ["external-library-linking"],
+            })).waitForDeployment() as unknown as PublicDataStorage;
 
         await (await gwtToken.enableTransfer([await contract.getAddress()])).wait();
+
+        nftBridge = await (await ethers.getContractFactory("NFTBridge")).deploy();
+        await (await contract.allowPublicDataContract(await nftBridge.getAddress())).wait();
     }
 
     before(async () => {
@@ -62,6 +82,10 @@ describe("PublicDataStorage", function () {
             await (await dmcToken.connect(signer).approve(await exchange.getAddress(), ethers.parseEther("1000"))).wait();
             await (await exchange.connect(signer).exchangeGWT(ethers.parseEther("1000"))).wait();
             await (await gwtToken.connect(signer).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
+        }
+        
+        for (const data of TestDatas) {
+            await (await nftBridge.setData(data.hash)).wait();
         }
 
         // large balance
@@ -88,11 +112,13 @@ describe("PublicDataStorage", function () {
             showTimeout: config.showTimeout,
             maxNonceBlockDistance: config.maxNonceBlockDistance,
             minRankingScore: config.minRankingScore,
-            minDataSize: config.minDataSize
+            minDataSize: config.minDataSize,
+            createDepositRatio: config.createDepositRatio,
         };
         setConfig.showTimeout = 720n;
         setConfig.lockAfterShow = 720n;
         setConfig.minRankingScore = 1n;
+        setConfig.createDepositRatio = 1;
         await (await contract.setSysConfig(setConfig)).wait();
 
         expect((await contract.sysConfig()).showTimeout).to.equal(720);
@@ -101,7 +127,7 @@ describe("PublicDataStorage", function () {
     
     it("create public data", async () => {
         // 需要的最小抵押：1/8 GB * 96(周) * 64(倍) = 768 GWT
-        await expect(contract.createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
             .emit(contract, "PublicDataCreated").withArgs(TestDatas[0].hash)
             .emit(contract, "SponsorChanged").withArgs(TestDatas[0].hash, ethers.ZeroAddress, signers[0].address)
             .emit(contract, "DepositData").withArgs(signers[0].address, TestDatas[0].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"));
@@ -111,35 +137,35 @@ describe("PublicDataStorage", function () {
 
     it("create public data failed", async () => {
         // duplicate create
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[0].hash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
             .to.be.revertedWith("public data already exists")
 
         // invalid hash
-        await expect(contract.connect(signers[15]).createPublicData(ethers.ZeroHash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(ethers.ZeroHash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
             .to.be.revertedWith("data hash is empty")
 
         // // too little
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 0, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 0, ethers.parseEther("768"), await nftBridge.getAddress()))
             .to.be.revertedWith("deposit ratio is too small")
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 63, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 63, ethers.parseEther("768"), await nftBridge.getAddress()))
             .to.be.revertedWith("deposit ratio is too small")
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("0"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("0"), await nftBridge.getAddress()))
             .to.be.revertedWith("deposit amount is too small")
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("767.9"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("767.9"), await nftBridge.getAddress()))
             .to.be.revertedWith("deposit amount is too small")
 
         // // more then total gwt amounts
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210001"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210001"), await nftBridge.getAddress()))
             .to.be.reverted;
 
         // cut the appropriate amount
         await (await gwtToken.connect(signers[15]).approve(await contract.getAddress(), ethers.parseEther("767"))).wait();
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
             .to.be.reverted;
 
         // cost all gwts
         await (await gwtToken.connect(signers[15]).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
-        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210000"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[15]).createPublicData(TestDatas[9].hash, 64, ethers.parseEther("210000"), await nftBridge.getAddress()))
             .emit(contract, "PublicDataCreated").withArgs(TestDatas[9].hash)
             .emit(contract, "SponsorChanged").withArgs(TestDatas[9].hash, ethers.ZeroAddress, signers[15].address)
             .emit(contract, "DepositData").withArgs(signers[15].address, TestDatas[9].hash, ethers.parseEther("168000"), ethers.parseEther("42000"));
@@ -157,7 +183,7 @@ describe("PublicDataStorage", function () {
 
     it("deposit data failed", async () => {
         // prepare
-        await expect(contract.connect(signers[14]).createPublicData(TestDatas[8].hash, 64, ethers.parseEther("768"), ethers.ZeroAddress, 0))
+        await expect(contract.connect(signers[14]).createPublicData(TestDatas[8].hash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
             .emit(contract, "PublicDataCreated").withArgs(TestDatas[8].hash)
             .emit(contract, "SponsorChanged").withArgs(TestDatas[8].hash, ethers.ZeroAddress, signers[14].address)
             .emit(contract, "DepositData").withArgs(signers[14].address, TestDatas[8].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"));

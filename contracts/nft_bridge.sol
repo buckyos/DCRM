@@ -1,33 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "./public_data_storage.sol";
 
-contract NFTBridge is Ownable {
-    struct NFTInfo {
-        address nftContract;
-        uint256 tokenId;
-    }
-    mapping (bytes32 => address) initOwnerData;
-    mapping (bytes32 => NFTInfo) nftInfos;
+contract NFTBridge is IERCPublicDataContract {
+    mapping (bytes32 => address) ownerData;
 
-    constructor() Ownable(msg.sender) {
+    constructor() {
     }
 
-    function setOwnerData(bytes32 dataMixedHash, address owner) public onlyOwner {
-        initOwnerData[dataMixedHash] = owner;
+    function setData(bytes32 dataMixedHash) public {
+        ownerData[dataMixedHash] = msg.sender;
     }
 
-    function setNFTInfo(bytes32 dataMixedHash, address nftContract, uint256 tokenId) public onlyOwner {
-        nftInfos[dataMixedHash] = NFTInfo(nftContract, tokenId);
-    }
-
-    function getOwner(bytes32 dataMixedHash) public view returns (address) {
-        address owner = initOwnerData[dataMixedHash];
-        if (owner == address(0)) {
-            owner = IERC721(nftInfos[dataMixedHash].nftContract).ownerOf(nftInfos[dataMixedHash].tokenId);
-        }
-        return owner;
+    function getDataOwner(bytes32 dataMixedHash) public view returns (address) {
+        return ownerData[dataMixedHash];
     }
 }

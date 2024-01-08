@@ -18,11 +18,12 @@ interface IERCPublicDataContract {
     //return the owner of the data
     function getDataOwner(bytes32 dataHash) external view returns (address);
 }
-
+/*
 interface IERC721VerifyDataHash{
     //return token data hash
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
 }
+*/
 // Review: 考虑有一些链的出块时间不确定,使用区块间隔要谨慎，可以用区块的时间戳
 
 
@@ -39,13 +40,10 @@ interface IERC721VerifyDataHash{
 
 contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     enum ShowType { Normal, Immediately }
-    enum BridgeUsage { Force, Perfered, Deny}
 
     struct PublicData {
-        address owner;
         address sponsor;
-        address nftContract;
-        uint256 tokenId;
+        address dataContract;
         uint256 maxDeposit;
         uint256 dataBalance;
         uint64 depositRatio;
@@ -70,12 +68,12 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
     GWTToken public gwtToken;// Gb per Week Token
     address public foundationAddress;
-    NFTBridge public nftBridge;
-    BridgeUsage public bridgeUsage;
 
     mapping(address => SupplierInfo) _supplierInfos;
     mapping(bytes32 => PublicData) _publicDatas;
     mapping(uint256 => DataProof) _publicDataProofs;
+
+    mapping(address => bool) _allowedPublicDataContract;
 
     struct CycleDataInfo {
         address[] lastShowers;
@@ -116,7 +114,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     }
 
     SysConfig public sysConfig;
-    uint256 constant totalRewardScore = 1600;
+    uint256 public totalRewardScore;
 
     event SupplierBalanceChanged(address supplier, uint256 avalibleBalance, uint256 lockedBalance);
     event GWTStacked(address supplier, uint256 amount);
@@ -131,20 +129,19 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block);
     event WithdrawAward(bytes32 mixedHash, uint256 cycle);
 
-    function initialize(address _gwtToken, address _Foundation, address _nftBridge) public initializer {
-        __PublicDataStorageUpgradable_init(_gwtToken, _Foundation, _nftBridge);
+    function initialize(address _gwtToken, address _Foundation) public initializer {
+        __PublicDataStorageUpgradable_init(_gwtToken, _Foundation);
     }
 
-    function __PublicDataStorageUpgradable_init(address _gwtToken, address _Foundation, address _nftBridge) internal onlyInitializing {
+    function __PublicDataStorageUpgradable_init(address _gwtToken, address _Foundation) internal onlyInitializing {
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
 
         gwtToken = GWTToken(_gwtToken);
-        nftBridge = NFTBridge(_nftBridge);
         _startBlock = block.number;
         _currectCycle = 0;
         foundationAddress = _Foundation;
-        bridgeUsage = BridgeUsage.Force;
+        totalRewardScore = 1600;
 
         // 设置初始参数
         sysConfig.minDepositRatio = 64;             // create data时最小为64倍
@@ -164,8 +161,12 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         
     }
 
-    function setBridgeUsage(BridgeUsage usage) public onlyOwner {
-        bridgeUsage = usage;
+    function allowPublicDataContract(address contractAddr) public onlyOwner {
+        _allowedPublicDataContract[contractAddr] = true;
+    }
+
+    function denyPublicDataContract(address contractAddr) public onlyOwner {
+        _allowedPublicDataContract[contractAddr] = false;
     }
 
     function setSysConfig(SysConfig calldata config) public onlyOwner {
@@ -233,12 +234,14 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         bytes32 dataMixedHash,
         uint64 depositRatio,
         uint256 depositAmount, 
-        address publicDataContract,
-        uint256 tokenId
+        address publicDataContract
     ) public {
+        require(dataMixedHash != bytes32(0), "data hash is empty");
+        require(_allowedPublicDataContract[publicDataContract], " data contract not allowed");
+        require(IERCPublicDataContract(publicDataContract).getDataOwner(dataMixedHash) != address(0), "not found in data contract");
+        
         // 质押率影响用户SHOW数据所需要冻结的质押
         require(depositRatio >= sysConfig.minDepositRatio, "deposit ratio is too small");
-        require(dataMixedHash != bytes32(0), "data hash is empty");
         // minAmount = 数据大小*GWT兑换比例*最小时长*质押率
         // get data size from data hash
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
@@ -251,31 +254,8 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         publicDataInfo.depositRatio = depositRatio;
         publicDataInfo.maxDeposit = depositAmount;
         publicDataInfo.sponsor = msg.sender;
+        publicDataInfo.dataContract = publicDataContract;
         gwtToken.transferFrom(msg.sender, address(this), depositAmount);
-
-        address owner = address(0);
-        if (bridgeUsage != BridgeUsage.Deny) {
-            owner = nftBridge.getOwner(dataMixedHash);
-        }
-
-        // force模式，从桥合约一定能取到值
-        if (bridgeUsage == BridgeUsage.Force) {
-            require(owner != address(0), "data hash not in bridge");
-        }
-
-        // perfered模式，以nftBridge的结果为准
-        if (owner == address(0)) {
-            if (publicDataContract == address(0)) {
-                publicDataInfo.owner = msg.sender;
-            } else {    // 认为publicDataContract是IERC721VerifyDataHash
-                require(dataMixedHash == IERC721VerifyDataHash(publicDataContract).tokenDataHash(tokenId), "NFT data hash mismatch");
-                publicDataInfo.nftContract = publicDataContract;
-                publicDataInfo.tokenId = tokenId;
-            }
-        } else {
-            publicDataInfo.nftContract = address(nftBridge);
-            // 不需要设置token id;因为nftBridge是以hash做key的
-        }
 
         uint256 balance_add = (depositAmount * 8) / 10;
         publicDataInfo.dataBalance += balance_add;
@@ -306,11 +286,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
         PublicData memory info = _publicDatas[dataMixedHash];
-        if (info.owner != address(0)) {
-            return info.owner;
-        } else {
-            return IERCPublicDataContract(info.nftContract).getDataOwner(dataMixedHash);
-        }
+        return _getDataOwner(dataMixedHash, info);
     }
 
     function addDeposit(bytes32 dataMixedHash, uint256 depositAmount) public {
@@ -558,15 +534,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     }
 
     function _getDataOwner(bytes32 dataMixedHash, PublicData memory publicDataInfo) internal view returns(address) {
-        if (publicDataInfo.nftContract == address(nftBridge)) {
-            return nftBridge.getOwner(dataMixedHash);
-        }
-
-        if (publicDataInfo.owner != address(0)) {
-            return publicDataInfo.owner;
-        } else {
-            return IERCPublicDataContract(publicDataInfo.nftContract).getDataOwner(dataMixedHash);
-        }
+        return IERCPublicDataContract(publicDataInfo.dataContract).getDataOwner(dataMixedHash);
     }
 
     // return: 1: sponsor, 2- 6: last shower, 7: owner, 0: no one

@@ -13,8 +13,12 @@ contract DMCToken is ERC20, Ownable {
         _;
     }
 
-    constructor(uint256 _maxSupply) ERC20("Datamall Chain Token", "DMC") Ownable(msg.sender) {
+    constructor(uint256 _maxSupply, address[] memory initAddress, uint[] memory initAmount) ERC20("Datamall Chain Token", "DMC") Ownable(msg.sender) {
         maxSupply = _maxSupply;
+
+        for (uint i = 0; i < initAddress.length; i++) {
+            _mint(initAddress[i], initAmount[i]);
+        }
     }
 
     function enableMinter(address[] calldata addresses) public onlyOwner {
