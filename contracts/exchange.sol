@@ -12,33 +12,9 @@ import "./gwt.sol";
 contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     DMCToken dmcToken;
     GWTToken gwtToken;
-    bytes32 luckyMintRoot;
-    //mapping (address => bool) allow_dmcMint;
-    mapping (bytes32 => bool) luckyHashUsed;
-    mapping (address => uint256) mintAfter;
-
-    uint mintAfterTime;
-    /*
-    modifier onlyMinter() {
-        require(allow_dmcMint[msg.sender], "mint not allowed");
-        _;
-    }
-
-    function enableDMCMint(address[] calldata addresses) public onlyOwner {
-        for (uint i = 0; i < addresses.length; i++) {
-            allow_dmcMint[addresses[i]] = true;
-        }
-    }
-
-    function disableDMCMint(address[] calldata addresses) public onlyOwner {
-        for (uint i = 0; i < addresses.length; i++) {
-            allow_dmcMint[addresses[i]] = false;
-        }
-    }
-    */
+    mapping (bytes32 => uint256) _mintDMC;
     function initialize(address _dmcToken, address _gwtToken) public initializer {
         __ExchangeUpgradable_init(_dmcToken, _gwtToken);
-        mintAfterTime = 1 days;
     }
 
     function __ExchangeUpgradable_init(address _dmcToken, address _gwtToken) internal onlyInitializing {
@@ -52,10 +28,8 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         
     }
 
-    
-
-    function setLuckyMintRoot(bytes32 _luckyMintRoot) public onlyOwner {
-        luckyMintRoot = _luckyMintRoot;
+    function allowMintDMC(string calldata cookie, uint256 amount) public onlyOwner {
+        _mintDMC[keccak256(abi.encode(cookie))] = amount;
     }
 
     function gwtRate() public pure returns(uint256) {
@@ -75,16 +49,10 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         dmcToken.transfer(msg.sender, dmcAmount);
     }
 
-    function mintDMC(bytes32 luckyHash, bytes32[] calldata luckyPath) public /*onlyMinter*/ {
-        require(mintAfter[msg.sender] < block.timestamp, "mint too often");
-        if (luckyHash != bytes32(0) && MerkleProof.verify(luckyPath, luckyMintRoot, luckyHash)) {
-            require(!luckyHashUsed[luckyHash], "lucky hash used");
-            dmcToken.mint(msg.sender, 2100 * 10 ** dmcToken.decimals());
-            luckyHashUsed[luckyHash] = true;
-        } else {
-            dmcToken.mint(msg.sender, 210 * 10 ** dmcToken.decimals());
-        }
-
-        mintAfter[msg.sender] = block.timestamp + mintAfterTime;
+    function mintDMC(string calldata cookie) public {
+        bytes32 cookieHash = keccak256(abi.encode(cookie));
+        require(_mintDMC[cookieHash] > 0, "cannot mint");
+        dmcToken.mint(msg.sender, _mintDMC[cookieHash]);
+        _mintDMC[cookieHash] = 0;
     }
 }
