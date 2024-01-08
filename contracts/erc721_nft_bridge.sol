@@ -4,10 +4,10 @@ pragma solidity ^0.8.0;
 import "./public_data_storage.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
-contract NFTBridge is IERCPublicDataContract {
+contract ERC721NFTBridge is IERCPublicDataContract {
     IERC721 nftAddress;
 
-    mapping (bytes32 => uint) hashToTokenId;
+    mapping (bytes32 => uint256) hashToTokenId;
 
     constructor(IERC721 _nftAddress) {
         nftAddress = _nftAddress;
@@ -20,6 +20,6 @@ contract NFTBridge is IERCPublicDataContract {
     }
 
     function getDataOwner(bytes32 dataMixedHash) public view returns (address) {
-        return nftAddress.ownerOf(tokenId);
+        return nftAddress.ownerOf(hashToTokenId[dataMixedHash]);
     }
 }

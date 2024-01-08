@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "./public_data_storage.sol";
 
-contract NFTBridge is IERCPublicDataContract {
+contract OwnedNFTBridge is IERCPublicDataContract {
     mapping (bytes32 => address) ownerData;
 
     constructor() {
