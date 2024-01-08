@@ -3,7 +3,6 @@ pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
 import "./PublicDataProof.sol";
-import "./nft_bridge.sol";
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -239,7 +238,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         require(dataMixedHash != bytes32(0), "data hash is empty");
         require(_allowedPublicDataContract[publicDataContract], " data contract not allowed");
         require(IERCPublicDataContract(publicDataContract).getDataOwner(dataMixedHash) != address(0), "not found in data contract");
-        
+
         // 质押率影响用户SHOW数据所需要冻结的质押
         require(depositRatio >= sysConfig.minDepositRatio, "deposit ratio is too small");
         // minAmount = 数据大小*GWT兑换比例*最小时长*质押率
