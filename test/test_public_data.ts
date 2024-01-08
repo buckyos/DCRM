@@ -1,6 +1,6 @@
 import { ethers, upgrades } from "hardhat";
 import { expect } from "chai";
-import { DMCToken, Exchange, GWTToken, NFTBridge, PublicDataStorage } from "../typechain-types";
+import { DMCToken, Exchange, GWTToken, OwnedNFTBridge, PublicDataStorage } from "../typechain-types";
 
 //import * as TestDatas from "../testDatas/test_data.json";
 import fs from "node:fs";
@@ -33,7 +33,7 @@ describe("PublicDataStorage", function () {
     let gwtToken: GWTToken;
     let exchange: Exchange;
     let signers: HardhatEthersSigner[];
-    let nftBridge: NFTBridge
+    let nftBridge: OwnedNFTBridge
 
     async function deployContracts() {
         let listLibrary = await (await ethers.getContractFactory("SortedScoreList")).deploy();
@@ -69,7 +69,7 @@ describe("PublicDataStorage", function () {
 
         await (await gwtToken.enableTransfer([await contract.getAddress()])).wait();
 
-        nftBridge = await (await ethers.getContractFactory("NFTBridge")).deploy();
+        nftBridge = await (await ethers.getContractFactory("OwnedNFTBridge")).deploy();
         await (await contract.allowPublicDataContract(await nftBridge.getAddress())).wait();
     }
 
