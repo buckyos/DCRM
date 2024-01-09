@@ -3,16 +3,23 @@ import * as fs from "node:fs";
 import { Exchange, PublicDataStorage } from "../typechain-types";
 
 async function main() {
-    const dmcContract = await (await ethers.deployContract("DMCToken", [ethers.parseEther("100000000")])).waitForDeployment();
-    let dmcAddress = await dmcContract.getAddress();
-    console.log("DMCToken deployed to:", dmcAddress);
+    // 部署DMC合约，精度18，最大值10亿
+    // 基金会账户初始分配15W
+    // TODO：基金会账户地址？
+    let foundationAddress = "";
+    console.log("Deploying DMC...");
+    const dmcContract = await (await ethers.deployContract("DMCToken", [ethers.parseEther("1000000000"), [foundationAddress], [ethers.parseEther("150000")]])).waitForDeployment();
+    // 部署GWT合约
+    console.log("Deploying GWT...");
     const gwtContract = await (await ethers.deployContract("GWTToken")).waitForDeployment();
 
-    let gwtAddress = await gwtContract.getAddress();
-    console.log("GWT deployed to:", gwtAddress);
-
+    // TODO：BRC mint用的lucky mint表，和Exchange里的是同一个？
     const luckyMint = await (await ethers.deployContract("LuckyMint")).waitForDeployment();
 
+    let gwtAddress = await gwtContract.getAddress();
+    let dmcAddress = await dmcContract.getAddress();
+    // 部署兑换合约
+    console.log("Deploying Exchange...");
     let exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"),
         [dmcAddress, gwtAddress],
         {
@@ -21,11 +28,18 @@ async function main() {
             timeout: 0
         })).waitForDeployment() as unknown as Exchange;
 
+    console.log("set minter...");
+    await (await dmcContract.enableMinter([await exchange.getAddress()])).wait();
+    await (await gwtContract.enableMinter([await exchange.getAddress()])).wait();
+    // TODO: 处理allowMintDMC的权限问题
+
+    // 部署公共数据合约的库合约
+    console.log("Depoly Library...");
     let listLibrary = await (await ethers.getContractFactory("SortedScoreList")).deploy();
     let proofLibrary = await (await ethers.getContractFactory("PublicDataProof")).deploy();
-
-    let foundationAddress = (await ethers.getSigners())[19].address;
-
+    
+    console.log("Depoly PublicDataStorage...");
+    //let foundationAddress = (await ethers.getSigners())[19].address;
     const publicDataStorage = await (await upgrades.deployProxy(await ethers.getContractFactory("PublicDataStorage", {
         libraries: {
             "SortedScoreList": await listLibrary.getAddress(),
@@ -42,13 +56,15 @@ async function main() {
 
     let publicDataStorageAddress = await publicDataStorage.getAddress();
     console.log("PublicDataStorage deployed to:", publicDataStorageAddress);
+    
+    // TODO：部署桥合约
+    //let bridge = await (await ethers.getContractFactory("NFTBridge")).deploy();
+    //await (await publicDataStorage.allowPublicDataContract(await bridge.getAddress())).wait()
 
-    let bridge = await (await ethers.getContractFactory("NFTBridge")).deploy();
-
-    await (await gwtContract.enableMinter([await exchange.getAddress()])).wait();
-
+    console.log("GWT enable transfer to publicDataStorage...");
     await (await gwtContract.enableTransfer([publicDataStorageAddress])).wait();
 
+    /*
     let config = await publicDataStorage.sysConfig();
     let setConfig: PublicDataStorage.SysConfigStruct = {
         minDepositRatio: config.minDepositRatio,
@@ -67,7 +83,7 @@ async function main() {
     setConfig.lockAfterShow = 720n;
     setConfig.minRankingScore = 1n;
     await (await publicDataStorage.setSysConfig(setConfig)).wait();
-    await (await publicDataStorage.allowPublicDataContract(await bridge.getAddress())).wait()
+    */
 
     if (network.name !== "hardhat") {
         fs.writeFileSync(`${network.name}-deployed.json`, JSON.stringify({
