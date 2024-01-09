@@ -4,7 +4,7 @@
 
 ## Mint DMC
 使用标准的Orindal协议进行Mint，根据现在部署的BRC20，成功获得210个DMC
-我们的扩展增加了“lucky”关键字（最长32个字节），当带有该关键字的交易进入被 区块高度与自己的地址的和被64整除的区块时，用户会得到2100个DMC。lucky mint在未进入正确区块时，蜕化成普通mint,获得上限规定的210个DMC.
+我们的扩展增加了“lucky”关键字（最长32个字节），当带有该关键字的交易进入被 区块高度与自己的地址的和被32整除的区块时，用户会得到2100个DMC。lucky mint在未进入正确区块时，蜕化成普通mint,获得上限规定的210个DMC.
 
 ```
 {"p":"brc-20","op":"mint","tick":"DMC ","amt":"2100","lucky":"dmc-discord"}
@@ -30,12 +30,12 @@ n = 基础分*基础倍率*2
 
 Mint数据成功的条件：
 a. 一个公共数据只能被铭刻一次。
-b. 用户的上一个BTC交易的hash与公共数据的hash满足一定的阈值（datahash - txhash) % 32 = 0。其基本逻辑是对任意公共数据，用户总有1/32的概率是可以有资格铭刻的。
+b. 用户的address与公共数据的hash满足一定的阈值abs（datahash - address) % 32 = 0。其基本逻辑是对任意公共数据，用户总有1/32的概率是可以有资格铭刻的。
 c. 在同一个区块里的铭刻并不遵循传统的先到先得效原则，如果在一个区块里同时有多个用户铭刻同一个公共数据，那么和公共数据距离（距离计算：user_addr xor data_hash ）最近的用户可以铭刻成功，其它用户的交易失败，但是不会退回DMC。
 d. 铭刻时的amt设置要大于等于上述支付金额要求。小于要求的amt会导致铭刻失败，会退回DMC。
 
 ```
-{"p":"pdi","op":"inscribe","ph":"$hash","text":"$text bind to public data","amt":1000,"price":100}
+{"p":"pdi","op":"inscribe","ph":"$hash","text":"$text bind to public data","amt":"1000","price":"100"}
 {"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",to="DMC Mint Pool Address",call:"pdi-inscribe","ph":"$hash","text":"$text bind to public data"}
 ```
 ## 吟唱（Chant）公共数据铭文
@@ -52,7 +52,7 @@ d. 铭刻时的amt设置要大于等于上述支付金额要求。小于要求�
 ```
 吟唱成功的条件
     1.用户拥有该铭文或用户共鸣了该数据铭文
-    2.公共数据Hash与进块的块高度满足一定的关系（DataHash - Block.Height）% 64 == 0
+    2.公共数据Hash与进块的块高度满足一定的关系（DataHash - Block.Height）% 32 == 0
     3.用户有和数据价值相当的DMC余额 (吟唱体力 )，吟唱体力的限制是为了防止高价值数据通过共鸣被大范围的吟唱
     4.同一个用户在一个区块里，只能吟唱一次
 
@@ -67,7 +67,7 @@ price_limit = n*2
 ```
 下面是协议的示例
 ```
-{"p":"pdi","op":"set","ph":"xxx","price":1000}
+{"p":"pdi","op":"set","ph":"xxx","price":"1000"}
 ```
 
 
