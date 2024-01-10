@@ -12,7 +12,7 @@ describe("Exchange", function () {
     before(async () => {
         signers = await ethers.getSigners()
 
-        dmc = await (await ethers.deployContract("DMCToken", [ethers.parseEther("1000000000")])).waitForDeployment()
+        dmc = await (await ethers.deployContract("DMCToken", [ethers.parseEther("1000000000"), [], []])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWTToken")).waitForDeployment()
         exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
             [await dmc.getAddress(), await gwt.getAddress()], 
@@ -24,17 +24,21 @@ describe("Exchange", function () {
 
         await (await gwt.enableMinter([await exchange.getAddress()])).wait();
         await (await dmc.enableMinter([await exchange.getAddress()])).wait();
-
-        // await (await dmc.transfer(signers[1].address, ethers.parseEther("1000"))).wait()
     })
 
     it("mint dmc", async () => {
-        await expect(exchange.connect(signers[0]).mintDMC(ethers.ZeroHash, []))
-            .emit(dmc, "Transfer").withArgs(ethers.ZeroAddress, signers[0].address, ethers.parseEther("210"));
+        await (await exchange.allowMintDMC(signers[0].address, "cookie1", ethers.parseEther("500"))).wait();
 
-        // 为了测试，将signers[0]直接加入dmc的minter，并给signers[1] mint 1000 dmc
-        await (await dmc.enableMinter([signers[0].address])).wait();
-        await (await dmc.connect(signers[0]).mint(signers[1].address, ethers.parseEther("1000"))).wait()
+        await expect(exchange.connect(signers[1]).allowMintDMC(signers[1].address, "cookie2", ethers.parseEther("1500"))).revertedWith("not mint admin");
+        await expect(exchange.connect(signers[1]).mintDMC("cookie1")).revertedWith("cannot mint");
+
+        await expect(exchange.mintDMC("cookie1")).changeTokenBalance(dmc, signers[0].address, ethers.parseEther("500"));
+
+        await expect(exchange.mintDMC("cookie1")).revertedWith("cannot mint");
+
+        await (await exchange.setMintAdmin(signers[1].address)).wait();
+        await (await exchange.connect(signers[1]).allowMintDMC(signers[1].address, "cookie2", ethers.parseEther("1000"))).wait();
+        await expect(exchange.connect(signers[1]).mintDMC("cookie2")).changeTokenBalance(dmc, signers[1].address, ethers.parseEther("1000"));
     });
 
     it("exchange dmc to gwt", async () => {
