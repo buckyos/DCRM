@@ -206,7 +206,10 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         // 开始一个周期：从上个周期的奖励中拿20%
         if (cycleInfo.totalAward == 0) {
             uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
-            cycleInfo.totalAward = (lastCycleReward - (lastCycleReward * 4 / 5));
+            // 0.05作为基金会收入
+            uint256 fundationIncome = lastCycleReward * 5 / 100;
+            gwtToken.transfer(foundationAddress, fundationIncome);
+            cycleInfo.totalAward = (lastCycleReward - (lastCycleReward * 4 / 5) - fundationIncome);
              _currectCycle = cycleNumber;
         }
 

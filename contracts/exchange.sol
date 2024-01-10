@@ -13,6 +13,8 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     DMCToken dmcToken;
     GWTToken gwtToken;
     mapping (bytes32 => uint256) _mintDMC;
+
+    address mintAdmin;
     function initialize(address _dmcToken, address _gwtToken) public initializer {
         __ExchangeUpgradable_init(_dmcToken, _gwtToken);
     }
@@ -22,14 +24,20 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         __Ownable_init(msg.sender);
         dmcToken = DMCToken(_dmcToken);
         gwtToken = GWTToken(_gwtToken);
+        mintAdmin = msg.sender;
     }
 
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         
     }
 
-    function allowMintDMC(string calldata cookie, uint256 amount) public onlyOwner {
-        _mintDMC[keccak256(abi.encode(cookie))] = amount;
+    function setMintAdmin(address _mintAdmin) public onlyOwner {
+        mintAdmin = _mintAdmin;
+    }
+
+    function allowMintDMC(address mintAddr, string calldata cookie, uint256 amount) public {
+        require(msg.sender == mintAdmin, "not mint admin");
+        _mintDMC[keccak256(abi.encode(mintAddr, cookie))] = amount;
     }
 
     function gwtRate() public pure returns(uint256) {
@@ -50,7 +58,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function mintDMC(string calldata cookie) public {
-        bytes32 cookieHash = keccak256(abi.encode(cookie));
+        bytes32 cookieHash = keccak256(abi.encode(msg.sender, cookie));
         require(_mintDMC[cookieHash] > 0, "cannot mint");
         dmcToken.mint(msg.sender, _mintDMC[cookieHash]);
         _mintDMC[cookieHash] = 0;
