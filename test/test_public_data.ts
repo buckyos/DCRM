@@ -83,10 +83,8 @@ describe("PublicDataStorage", function () {
             await (await exchange.connect(signer).exchangeGWT(ethers.parseEther("1000"))).wait();
             await (await gwtToken.connect(signer).approve(await contract.getAddress(), ethers.parseEther("210000"))).wait();
         }
-        
-        for (const data of TestDatas) {
-            await (await nftBridge.setData([data.hash])).wait();
-        }
+
+        await await(nftBridge.setData(TestDatas.map((data) => data.hash)));
 
         // large balance
         await (await dmcToken.transfer(await signers[14].address, ethers.parseEther("1000000"))).wait();

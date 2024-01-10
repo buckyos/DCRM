@@ -2,14 +2,15 @@
 pragma solidity ^0.8.0;
 
 import "./public_data_storage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract OwnedNFTBridge is IERCPublicDataContract {
+contract OwnedNFTBridge is IERCPublicDataContract, Ownable {
     mapping (bytes32 => address) ownerData;
 
-    constructor() {
+    constructor() Ownable(msg.sender) {
     }
 
-    function setData(bytes32[] calldata dataMixedHash) public {
+    function setData(bytes32[] calldata dataMixedHash) public onlyOwner {
         for (uint i = 0; i < dataMixedHash.length; i++) {
             ownerData[dataMixedHash[i]] = msg.sender;
         }
