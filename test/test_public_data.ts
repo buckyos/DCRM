@@ -85,7 +85,7 @@ describe("PublicDataStorage", function () {
         }
         
         for (const data of TestDatas) {
-            await (await nftBridge.setData(data.hash)).wait();
+            await (await nftBridge.setData([data.hash])).wait();
         }
 
         // large balance

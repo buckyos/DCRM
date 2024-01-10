@@ -9,8 +9,10 @@ contract OwnedNFTBridge is IERCPublicDataContract {
     constructor() {
     }
 
-    function setData(bytes32 dataMixedHash) public {
-        ownerData[dataMixedHash] = msg.sender;
+    function setData(bytes32[] calldata dataMixedHash) public {
+        for (uint i = 0; i < dataMixedHash.length; i++) {
+            ownerData[dataMixedHash[i]] = msg.sender;
+        }
     }
 
     function getDataOwner(bytes32 dataMixedHash) public view returns (address) {
