@@ -27,9 +27,9 @@ describe("Exchange", function () {
     })
 
     it("mint dmc", async () => {
-        await (await exchange.allowMintDMC(signers[0].address, "cookie1", ethers.parseEther("500"))).wait();
+        await (await exchange.allowMintDMC([signers[0].address], ["cookie1"], [ethers.parseEther("500")])).wait();
 
-        await expect(exchange.connect(signers[1]).allowMintDMC(signers[1].address, "cookie2", ethers.parseEther("1500"))).revertedWith("not mint admin");
+        await expect(exchange.connect(signers[1]).allowMintDMC([signers[1].address], ["cookie2"], [ethers.parseEther("1500")])).revertedWith("not mint admin");
         await expect(exchange.connect(signers[1]).mintDMC("cookie1")).revertedWith("cannot mint");
 
         await expect(exchange.mintDMC("cookie1")).changeTokenBalance(dmc, signers[0].address, ethers.parseEther("500"));
@@ -37,7 +37,7 @@ describe("Exchange", function () {
         await expect(exchange.mintDMC("cookie1")).revertedWith("cannot mint");
 
         await (await exchange.setMintAdmin(signers[1].address)).wait();
-        await (await exchange.connect(signers[1]).allowMintDMC(signers[1].address, "cookie2", ethers.parseEther("1000"))).wait();
+        await (await exchange.connect(signers[1]).allowMintDMC([signers[1].address], ["cookie2"], [ethers.parseEther("1000")])).wait();
         await expect(exchange.connect(signers[1]).mintDMC("cookie2")).changeTokenBalance(dmc, signers[1].address, ethers.parseEther("1000"));
     });
 
