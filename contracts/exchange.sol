@@ -35,9 +35,11 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         mintAdmin = _mintAdmin;
     }
 
-    function allowMintDMC(address mintAddr, string calldata cookie, uint256 amount) public {
+    function allowMintDMC(address[] calldata mintAddr, string[] calldata cookie, uint256[] calldata amount) public {
         require(msg.sender == mintAdmin, "not mint admin");
-        _mintDMC[keccak256(abi.encode(mintAddr, cookie))] = amount;
+        for (uint i = 0; i < mintAddr.length; i++) {
+             _mintDMC[keccak256(abi.encode(mintAddr[i], cookie[i]))] = amount[i];
+        }
     }
 
     function gwtRate() public pure returns(uint256) {
