@@ -19,11 +19,23 @@
 
 铭刻时系统会从ETH网络中同步一些公共数据的MetaData过来，作为首次铭刻者，用户也可以写入不可修改的铭文文本（我们鼓励文本内容是对这个公共数据的感受）。在铭刻时，也可以同步设置共鸣价格。
 
-铭刻公共数据需要用户支付数量为n的DMC。
+铭刻公共数据需要用户支付数量为 2n 的DMC。
 ```
-基础分 = f(data_size) = 999 / (1 + exp(-0.00000762939453125*(x-127,999,999))) + 1
-基本倍率 = f(point) =  19 / (1 + e^(-0.15(x-90))) + 1
-n = 基础分*基础倍率*2
+#基础分
+def get_basic(data_size):
+    x = 0
+    start_size = 128*1024*1024
+    if data_size > start_size:
+        x = data_size - start_size
+    return 999 / (1 + math.exp(-0.00000762939453125*(x))) + 1
+
+基本倍率 
+def get_basic_rate(data_points):
+    return 19 / (1 + math.exp(-0.15*(data_points-90))) + 1
+
+#n = 基础分*基础倍率
+def get_n(data_size,data_points):
+    return get_basic(data_size)*get_basic_rate(data_points)
 ```
 1. 任何公共数据的积分(Points)默认是1.
 2. 用户为铭刻公共数据铭文支付的DMC的98%会进入 DMC Mint Pool，剩余的2%作为手续费进入基金会账户。
