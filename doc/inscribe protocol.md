@@ -48,7 +48,8 @@ d. 铭刻时的amt设置要大于等于上述支付金额要求。小于要求�
 
 ```
 {"p":"pdi","op":"inscribe","ph":"$hash","text":"$text bind to public data","amt":"1000","price":"100"}
-{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",to="DMC Mint Pool Address",call:"pdi-inscribe","ph":"$hash","text":"$text bind to public data"}
+# to是给到 基金会账户
+{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",call:"pdi-inscribe","ph":"$hash","text":"$text bind to public data"}
 ```
 ## 吟唱（Chant）公共数据铭文
 吟唱公共数据铭文来获得DMC奖励。
@@ -90,7 +91,8 @@ price_limit = n*2
 - 如果目标用户不拥有该数据的铭文，共鸣失败，会退款。
 ```
 {p:"pdi","op":"res","tick":"DMC ","amt":"1000",ph:"$datahash"}
-{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",to="DMC Mint Pool Address",call:"pdi-res","ph":"$hash"}
+# to是给到 基金会账户
+{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",call:"pdi-res","ph":"$hash"}
 ```
 自己共鸣自己的铭文可能会带来简单的放大问题，因此继续增加下面三条限制
 1. 设置共鸣的最大数量 ： 15
