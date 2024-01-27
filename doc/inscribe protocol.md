@@ -4,10 +4,10 @@
 
 ## Mint DMC
 使用标准的Orindal协议进行Mint，根据现在部署的BRC20，成功获得210个DMC
-我们的扩展增加了“lucky”关键字（最长32个字节），当带有该关键字的交易进入被 区块高度与自己的地址的和被32整除的区块时，用户会得到2100个DMC。lucky mint在未进入正确区块时，蜕化成普通mint,获得上限规定的210个DMC.
+我们的扩展增加了“lucky”关键字，当带有该关键字的交易进入被 区块高度与自己的地址的和被32整除的区块时，用户会得到210个DMCs+1890个DMC-SP。lucky mint在未进入正确区块时，蜕化成普通mint,只获得210个DMCs而没有DMC-SP.
 
 ```
-{"p":"brc-20","op":"mint","tick":"DMC ","amt":"2100","lucky":"dmc-discord"}
+{"p":"brc-20","op":"mint","tick":"DMC ","amt":"210","lucky":"dmc-discord"}
 ```
 
 为了把现在DMC主网的token迁移过来，我们有一个记录在ETH合约里的“DMC销毁公开列表”。说明了lucky的一些特殊值。线定用户用这些特殊值进行mint时，会得到公开列表中说明的DMC数量。该公开列表一旦发布，就不会变化。该列表包含的DMC上限为4000万DMC。
@@ -47,9 +47,8 @@ c. 在同一个区块里的铭刻并不遵循传统的先到先得效原则，�
 d. 铭刻时的amt设置要大于等于上述支付金额要求。小于要求的amt会导致铭刻失败，会退回DMC。
 
 ```
-{"p":"pdi","op":"inscribe","ph":"$hash","text":"$text bind to public data","amt":"1000","price":"100"}
-# to是给到 基金会账户
-{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",call:"pdi-inscribe","ph":"$hash","text":"$text bind to public data"}
+{"p":"pdi","op":"inscribe","ph":"$hash","text":"$text bind to public data","price":"100"}
+
 ```
 ## 吟唱（Chant）公共数据铭文
 吟唱公共数据铭文来获得DMC奖励。
@@ -91,8 +90,6 @@ price_limit = n*2
 - 如果目标用户不拥有该数据的铭文，共鸣失败，会退款。
 ```
 {p:"pdi","op":"res","tick":"DMC ","amt":"1000",ph:"$datahash"}
-# to是给到 基金会账户
-{"p":"brc-20","op":"transfer","tick":"DMC ","amt":"1000",call:"pdi-res","ph":"$hash"}
 ```
 自己共鸣自己的铭文可能会带来简单的放大问题，因此继续增加下面三条限制
 1. 设置共鸣的最大数量 ： 15
