@@ -115,8 +115,9 @@ library PublicDataProof {
                     computedHash = sha256(bytes.concat(proof[i], currentHash));
                 }
                 currentHash = _bytes32To16(computedHash);
-                leaf_index = leaf_index / 2;
             }
+            
+            leaf_index = leaf_index / 2;
         }
 
         return computedHash;

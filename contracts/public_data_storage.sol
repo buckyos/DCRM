@@ -160,12 +160,17 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         
     }
 
-    function allowPublicDataContract(address contractAddr) public onlyOwner {
-        _allowedPublicDataContract[contractAddr] = true;
+    function allowPublicDataContract(address[] calldata contractAddrs) public onlyOwner {
+        for (uint i = 0; i < contractAddrs.length; i++) {
+            _allowedPublicDataContract[contractAddrs[i]] = true;
+        }
+        
     }
 
-    function denyPublicDataContract(address contractAddr) public onlyOwner {
-        _allowedPublicDataContract[contractAddr] = false;
+    function denyPublicDataContract(address[] calldata contractAddrs) public onlyOwner {
+        for (uint i = 0; i < contractAddrs.length; i++) {
+            _allowedPublicDataContract[contractAddrs[i]] = false;
+        }
     }
 
     function setSysConfig(SysConfig calldata config) public onlyOwner {
@@ -284,6 +289,14 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
     function getCycleInfo(uint256 cycleNumber) public view returns(CycleOutputInfo memory) {
         return CycleOutputInfo(_cycleInfos[cycleNumber].totalAward, _cycleInfos[cycleNumber].scoreList.getSortedList());
+    }
+
+    function getPledgeInfo(address supplier) public view returns(SupplierInfo memory) {
+        return _supplierInfos[supplier];
+    }
+
+    function isDataContractAllowed(address contractAddr) public view returns(bool) {
+        return _allowedPublicDataContract[contractAddr];
     }
 
     function getOwner(bytes32 dataMixedHash) public view returns(address) {
