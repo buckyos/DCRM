@@ -84,7 +84,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         mapping(bytes32 => CycleDataInfo) dataInfos; 
 
         SortedScoreList.List scoreList;
-        uint256 totalAward;    // 记录这个cycle的总奖励
+        uint256 totalReward;    // 记录这个cycle的总奖励
     }
 
     struct CycleOutputInfo {
@@ -96,7 +96,6 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     uint256 _currectCycle;
     mapping(uint256 => CycleInfo) _cycleInfos;
     uint256 _startBlock;
-    uint64 _minRankingScore;
 
     struct SysConfig {
         uint32 minDepositRatio;
@@ -126,7 +125,8 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
     event SupplierPunished(address supplier, bytes32 mixedHash, uint256 amount);
     event ShowDataProof(address supplier, bytes32 dataMixedHash, uint256 nonce_block);
-    event WithdrawAward(bytes32 mixedHash, uint256 cycle);
+    event WithdrawReward(bytes32 mixedHash, uint256 cycle);
+    event CycleStart(uint256 cycleNumber, uint256 startReward);
 
     function initialize(address _gwtToken, address _Foundation) public initializer {
         __PublicDataStorageUpgradable_init(_gwtToken, _Foundation);
@@ -191,6 +191,19 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         }
     }
 
+    function _getRemainScore(uint256 length) internal pure returns(uint16) {
+        uint16[33] memory remainScores = [
+            1600, 1360, 1180, 1030, 910, 810,
+            730,  670,  617,  575, 539, 504,
+            470,  437,  405,  374, 344, 315,
+            287,  260,  234,  209, 185, 162,
+            140,  119,   99,   80,  62,  45,
+            29,   14, 0
+        ];
+
+        return remainScores[length];
+    }
+
     function _cycleNumber(uint256 blockNumber, uint256 startBlock) internal view returns(uint256) {
         uint cycleNumber = (blockNumber - startBlock) / sysConfig.blocksPerCycle;
         if (cycleNumber * sysConfig.blocksPerCycle + startBlock < blockNumber) {
@@ -209,13 +222,19 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         // 如果cycle的reward为0，说明这个周期还没有开始
         // 开始一个周期：从上个周期的奖励中拿20%
-        if (cycleInfo.totalAward == 0) {
-            uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
-            // 0.05作为基金会收入
+        if (cycleInfo.totalReward == 0) {
+            uint256 lastCycleReward = _cycleInfos[_currectCycle].totalReward;
+            // 5%作为基金会收入
             uint256 fundationIncome = lastCycleReward * 5 / 100;
             gwtToken.transfer(foundationAddress, fundationIncome);
-            cycleInfo.totalAward = (lastCycleReward - (lastCycleReward * 4 / 5) - fundationIncome);
-             _currectCycle = cycleNumber;
+            // 如果上一轮的获奖数据不足32个，剩余的奖金也滚动进此轮奖池
+            uint16 remainScore = _getRemainScore(_cycleInfos[_currectCycle].scoreList.length());
+            uint256 remainReward = lastCycleReward * 4 * remainScore / totalRewardScore / 5;
+
+            cycleInfo.totalReward = lastCycleReward - (lastCycleReward * 4 / 5) - fundationIncome + remainReward;
+            _currectCycle = cycleNumber;
+
+            emit CycleStart(cycleNumber, cycleInfo.totalReward);
         }
 
         return cycleInfo;
@@ -224,7 +243,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     
     function _addCycleReward(uint256 amount) private {
         CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
-        cycleInfo.totalAward += amount;
+        cycleInfo.totalReward += amount;
     }
 
     // 计算这些空间对应多少GWT，单位是wei
@@ -288,7 +307,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     }
 
     function getCycleInfo(uint256 cycleNumber) public view returns(CycleOutputInfo memory) {
-        return CycleOutputInfo(_cycleInfos[cycleNumber].totalAward, _cycleInfos[cycleNumber].scoreList.getSortedList());
+        return CycleOutputInfo(_cycleInfos[cycleNumber].totalReward, _cycleInfos[cycleNumber].scoreList.getSortedList());
     }
 
     function getPledgeInfo(address supplier) public view returns(SupplierInfo memory) {
@@ -456,7 +475,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         _updateLastSupplier(dataInfo, address(0), msg.sender);
 
         //只有超过阈值才会更新排名，这个设定会导致用户不多的时候排名不满（强制性累积奖金）
-        if (dataInfo.score > _minRankingScore) {
+        if (dataInfo.score > sysConfig.minRankingScore) {
             if (cycleInfo.scoreList.maxlen() < sysConfig.topRewards) {
                 cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
             }
@@ -523,9 +542,9 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
             if(root_hash < proof.proofResult) {
                 _supplierInfos[proof.prover].lockedBalance -= proof.lockedAmount;
 
-                uint256 awardFromPunish = proof.lockedAmount * 8 / 10;
-                gwtToken.transfer(msg.sender, awardFromPunish);
-                gwtToken.transfer(foundationAddress, proof.lockedAmount - awardFromPunish);
+                uint256 rewardFromPunish = proof.lockedAmount * 8 / 10;
+                gwtToken.transfer(msg.sender, rewardFromPunish);
+                gwtToken.transfer(foundationAddress, proof.lockedAmount - rewardFromPunish);
                 
                 emit SupplierPunished(proof.prover, dataMixedHash, proof.lockedAmount);
                 emit SupplierBalanceChanged(proof.prover, _supplierInfos[proof.prover].avalibleBalance, _supplierInfos[proof.prover].lockedBalance);
@@ -552,43 +571,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         return IERCPublicDataContract(publicDataInfo.dataContract).getDataOwner(dataMixedHash);
     }
 
-    // return: 1: sponsor, 2- 6: last shower, 7: owner, 0: no one
-    function _getWithdrawRole(address sender, bytes32 dataMixedHash, PublicData memory publicDataInfo, CycleDataInfo memory dataInfo) internal view returns(uint8) {
-        uint8 user = 0;
-        if (sender == publicDataInfo.sponsor) {
-            user |= 1 << 1;
-        }
-
-        if (sender == _getDataOwner(dataMixedHash, publicDataInfo)) {
-            user |= 1 << 7;
-        } 
-    
-        for (uint8 i = 0; i < dataInfo.lastShowers.length; i++) {
-            if (dataInfo.lastShowers[i] == sender) {
-                user |= uint8(1 << (i+2));
-            }
-        }
-
-        return user;
-    }
-
-    // sponsor拿50%, owner拿20%, 5个last shower平分30%
-    function _calcuteReward(uint8 user, uint256 totalReward, uint256 last_shower_length) internal pure returns(uint256) {
-        uint reward = 0;
-        if ((user >> 1) & 1 == 1) {
-            reward += totalReward / 2;
-        } 
-        if ((user >> 7) & 1 == 1) {
-            reward += totalReward / 5;
-        }
-        if (user & 124 > 0) {
-            reward += (totalReward - totalReward / 2 - totalReward / 5) / last_shower_length;
-        }
-
-        return reward;
-    }
-
-    function withdrawAward(uint256 cycleNumber, bytes32 dataMixedHash) public {
+    function withdrawReward(uint256 cycleNumber, bytes32 dataMixedHash) public {
         // 判断这次的cycle已经结束
         //require(_currectCycle > cycleNumber, "cycle not finish");
         require(block.number > cycleNumber * sysConfig.blocksPerCycle + _startBlock, "cycle not finish");
@@ -602,7 +585,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         require(dataInfo.score > 0, "already withdraw");
 
         // 计算该得到多少奖励
-        uint256 totalReward = cycleInfo.totalAward * 8 / 10;
+        uint256 totalReward = cycleInfo.totalReward * 8 / 10;
 
         uint8 score = _getRewardScore(scoreListRanking);
         // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
@@ -627,6 +610,6 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
         // 更新积分
         emit DataPointAdded(dataMixedHash, score);
-        emit WithdrawAward(dataMixedHash, cycleNumber);
+        emit WithdrawReward(dataMixedHash, cycleNumber);
     }
 }
