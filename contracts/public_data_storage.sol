@@ -84,7 +84,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         mapping(bytes32 => CycleDataInfo) dataInfos; 
 
         SortedScoreList.List scoreList;
-        uint256 totalReward;    // 记录这个cycle的总奖励
+        uint256 totalAward;    // 记录这个cycle的总奖励
     }
 
     struct CycleOutputInfo {
@@ -96,6 +96,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     uint256 _currectCycle;
     mapping(uint256 => CycleInfo) _cycleInfos;
     uint256 _startBlock;
+    uint64 _minRankingScore;
 
     struct SysConfig {
         uint32 minDepositRatio;
@@ -222,8 +223,8 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         // 如果cycle的reward为0，说明这个周期还没有开始
         // 开始一个周期：从上个周期的奖励中拿20%
-        if (cycleInfo.totalReward == 0) {
-            uint256 lastCycleReward = _cycleInfos[_currectCycle].totalReward;
+        if (cycleInfo.totalAward == 0) {
+            uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
             // 5%作为基金会收入
             uint256 fundationIncome = lastCycleReward * 5 / 100;
             gwtToken.transfer(foundationAddress, fundationIncome);
@@ -231,10 +232,10 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
             uint16 remainScore = _getRemainScore(_cycleInfos[_currectCycle].scoreList.length());
             uint256 remainReward = lastCycleReward * 4 * remainScore / totalRewardScore / 5;
 
-            cycleInfo.totalReward = lastCycleReward - (lastCycleReward * 4 / 5) - fundationIncome + remainReward;
+            cycleInfo.totalAward = lastCycleReward - (lastCycleReward * 4 / 5) - fundationIncome + remainReward;
             _currectCycle = cycleNumber;
 
-            emit CycleStart(cycleNumber, cycleInfo.totalReward);
+            emit CycleStart(cycleNumber, cycleInfo.totalAward);
         }
 
         return cycleInfo;
@@ -243,7 +244,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     
     function _addCycleReward(uint256 amount) private {
         CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
-        cycleInfo.totalReward += amount;
+        cycleInfo.totalAward += amount;
     }
 
     // 计算这些空间对应多少GWT，单位是wei
@@ -307,7 +308,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
     }
 
     function getCycleInfo(uint256 cycleNumber) public view returns(CycleOutputInfo memory) {
-        return CycleOutputInfo(_cycleInfos[cycleNumber].totalReward, _cycleInfos[cycleNumber].scoreList.getSortedList());
+        return CycleOutputInfo(_cycleInfos[cycleNumber].totalAward, _cycleInfos[cycleNumber].scoreList.getSortedList());
     }
 
     function getPledgeInfo(address supplier) public view returns(SupplierInfo memory) {
@@ -585,7 +586,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         require(dataInfo.score > 0, "already withdraw");
 
         // 计算该得到多少奖励
-        uint256 totalReward = cycleInfo.totalReward * 8 / 10;
+        uint256 totalReward = cycleInfo.totalAward * 8 / 10;
 
         uint8 score = _getRewardScore(scoreListRanking);
         // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中

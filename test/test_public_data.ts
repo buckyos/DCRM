@@ -70,7 +70,7 @@ describe("PublicDataStorage", function () {
         await (await gwtToken.enableTransfer([await contract.getAddress()])).wait();
 
         nftBridge = await (await ethers.getContractFactory("OwnedNFTBridge")).deploy();
-        await (await contract.allowPublicDataContract(await nftBridge.getAddress())).wait();
+        await (await contract.allowPublicDataContract([await nftBridge.getAddress()])).wait();
     }
 
     before(async () => {
@@ -325,7 +325,7 @@ describe("PublicDataStorage", function () {
         // data[0]可分到67,621.76 * 240 / 1600 = 10,143.264
         // owner获得10143.264*0.2=2028.6528
         //let cycleInfo = await contract.getCycleInfo(1);
-        let tx = contract.connect(signers[0]).withdrawAward(1, TestDatas[0].hash);
+        let tx = contract.connect(signers[0]).withdrawReward(1, TestDatas[0].hash);
         await expect(tx)
             .changeTokenBalance(gwtToken, signers[0], ethers.parseEther("2028.6528"));
         // sponser获得10143.264*0.5 = 5071.632
@@ -338,4 +338,16 @@ describe("PublicDataStorage", function () {
                 .changeTokenBalance(gwtToken, signers[index], ethers.parseEther("608.59584"));
         }
     });
+
+    it("next cycle reward", async () => {
+        //进行一次create来激活下个Cycle
+        await expect(contract.createPublicData(TestDatas[1].hash, 64, ethers.parseEther("768"), await nftBridge.getAddress()))
+            .emit(contract, "PublicDataCreated").withArgs(TestDatas[1].hash)
+            .emit(contract, "SponsorChanged").withArgs(TestDatas[1].hash, ethers.ZeroAddress, signers[0].address)
+            .emit(contract, "DepositData").withArgs(signers[0].address, TestDatas[1].hash, ethers.parseEther("614.4"), ethers.parseEther("153.6"))
+            .emit(contract, "CycleStart").withArgs(2, ethers.parseEther("70157.576"));
+
+        // 上期奖池数量：84527.2
+        // 本期奖池数量：84527.2 - 67,621.76 - 4,226.36 + 67,621.76 * (1600-240) / 1600 = 12,679.08 + 57,478.496 = 70,157.576
+    })
 });
