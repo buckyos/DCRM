@@ -55,4 +55,17 @@ contract GWTToken is ERC20Burnable, Ownable {
     function _update(address sender, address to, uint256 amount) internal override canTransfer(sender, to) {
         super._update(sender, to, amount);
     }
+
+    // only called from contract
+    function deductFrom(address spender, uint256 amount) public {
+        address sender = msg.sender;
+        require(allow_transfer[sender], "not allowed");
+        super._transfer(spender, sender, amount);
+    }
+
+    function burnFrom(address account, uint256 amount) public override {
+        address sender = msg.sender;
+        require(allow_minter[sender], "not allowed");
+        super._burn(account, amount);
+    }
 }
