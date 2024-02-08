@@ -37,7 +37,7 @@ interface IERC721VerifyDataHash{
  * 可能有精度损失？
  */
 
-contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     enum ShowType { Normal, Immediately }
 
     struct PublicData {
@@ -115,8 +115,6 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
     SysConfig public sysConfig;
     uint256 public totalRewardScore;
 
-    uint256 public version;
-
     event SupplierBalanceChanged(address supplier, uint256 avalibleBalance, uint256 lockedBalance);
     event GWTStacked(address supplier, uint256 amount);
     event GWTUnstacked(address supplier, uint256 amount);
@@ -140,7 +138,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         __Ownable_init(msg.sender);
 
         gwtToken = GWTToken(_gwtToken);
-        _startBlock = block.timestamp;
+        _startBlock = block.number;
         _currectCycle = 0;
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
@@ -149,16 +147,14 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         sysConfig.minDepositRatio = 64;             // create data时最小为64倍
         sysConfig.minPublicDataStorageWeeks = 96;   // create data时最小为96周
         sysConfig.minLockWeeks = 24;                // show的时候最小为24周，目前固定为最小值
-        sysConfig.blocksPerCycle = 3 days;           // 每个cycle为72小时
+        sysConfig.blocksPerCycle = 17280;           // 每个cycle为72小时
         sysConfig.topRewards = 32;                  // top 32名进榜
-        sysConfig.lockAfterShow = 2 days;            // show成功后48小时内才能解锁
-        sysConfig.showTimeout = 24 hours;               // show之后24小时允许挑战
+        sysConfig.lockAfterShow = 11520;            // show成功后48小时内才能解锁
+        sysConfig.showTimeout = 5760;               // show之后24小时允许挑战
         sysConfig.maxNonceBlockDistance = 2;        // 允许的nonce block距离, 要小于256
         sysConfig.minRankingScore = 64;             // 最小的排名分数
         sysConfig.minDataSize = 1 << 27;            // dataSize换算GWT时，最小值为128M
         sysConfig.createDepositRatio = 5;           // 因为初期推荐使用Immediate Show，这里会设置成5倍，可以让前十几个show都可以立即成立
-
-        version = 1;
     }
 
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
@@ -169,6 +165,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         for (uint i = 0; i < contractAddrs.length; i++) {
             _allowedPublicDataContract[contractAddrs[i]] = true;
         }
+        
     }
 
     function denyPublicDataContract(address[] calldata contractAddrs) public onlyOwner {
@@ -208,28 +205,16 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         return remainScores[length];
     }
 
-    function updateV1(uint256 startBlockTimestamp, address _gwtToken) public onlyOwner {
-        require(version == 0, "already updated");
-        _startBlock = startBlockTimestamp;
-        sysConfig.blocksPerCycle *= 15;
-        sysConfig.lockAfterShow *= 15;
-        sysConfig.showTimeout *= 15;
-
-        // maxNonceBlockDistance还保留块号逻辑
-
-        if (_gwtToken != address(0)) {
-            gwtToken = GWTToken(_gwtToken);
-        }
-
-        version = 1;
-    }
-
-    function _curCycleNumber() internal view returns(uint256) {
-        uint cycleNumber = (block.timestamp - _startBlock) / sysConfig.blocksPerCycle;
-        if (cycleNumber * sysConfig.blocksPerCycle + _startBlock < block.timestamp) {
+    function _cycleNumber(uint256 blockNumber, uint256 startBlock) internal view returns(uint256) {
+        uint cycleNumber = (blockNumber - startBlock) / sysConfig.blocksPerCycle;
+        if (cycleNumber * sysConfig.blocksPerCycle + startBlock < blockNumber) {
             cycleNumber += 1;
         }
         return cycleNumber;
+    }
+
+    function _curCycleNumber() internal view returns(uint256) {
+        return _cycleNumber(block.number, _startBlock);
     }
 
     // 通过记录一个最后的周期来解决周期之间可能有空洞的问题
@@ -297,7 +282,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         publicDataInfo.maxDeposit = depositAmount;
         publicDataInfo.sponsor = msg.sender;
         publicDataInfo.dataContract = publicDataContract;
-        gwtToken.deductFrom(msg.sender, depositAmount);
+        gwtToken.transferFrom(msg.sender, address(this), depositAmount);
 
         uint256 balance_add = (depositAmount * 8) / 10;
         publicDataInfo.dataBalance += balance_add;
@@ -344,7 +329,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         require(publicDataInfo.maxDeposit > 0, "public data not exist");
 
         // transfer deposit
-        gwtToken.deductFrom(msg.sender, depositAmount);
+        gwtToken.transferFrom(msg.sender, address(this), depositAmount);
 
         uint256 balance_add = (depositAmount * 8) / 10;
         publicDataInfo.dataBalance += balance_add;
@@ -370,14 +355,14 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
 
     function _adjustSupplierBalance(address supplier) internal {
         SupplierInfo storage supplierInfo = _supplierInfos[supplier];
-        if (supplierInfo.unlockBlock < block.timestamp) {
+        if (supplierInfo.unlockBlock < block.number) {
             supplierInfo.avalibleBalance += supplierInfo.lockedBalance;
             supplierInfo.lockedBalance = 0;
         }
     }
 
     function pledgeGwt(uint256 amount) public {
-        gwtToken.deductFrom(msg.sender, amount);
+        gwtToken.transferFrom(msg.sender, address(this), amount);
         _supplierInfos[msg.sender].avalibleBalance += amount;
 
         emit SupplierBalanceChanged(msg.sender, _supplierInfos[msg.sender].avalibleBalance, _supplierInfos[msg.sender].lockedBalance);
@@ -413,7 +398,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         require(supplierInfo.avalibleBalance >= lockAmount, "insufficient balance");
         supplierInfo.avalibleBalance -= lockAmount;
         supplierInfo.lockedBalance += lockAmount;
-        supplierInfo.unlockBlock = block.timestamp + sysConfig.lockAfterShow;
+        supplierInfo.unlockBlock = block.number + sysConfig.lockAfterShow;
         emit SupplierBalanceChanged(supplierAddress, supplierInfo.avalibleBalance, supplierInfo.lockedBalance);
         return (lockAmount, isImmediately);
     }
@@ -509,14 +494,16 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
         DataProof storage proof = _publicDataProofs[proofKey];
 
         require(proof.proofBlockHeight > 0, "proof not exist");
-        require(block.timestamp - proof.proofBlockHeight > sysConfig.showTimeout, "proof not unlock");
+        require(block.number - proof.proofBlockHeight > sysConfig.showTimeout, "proof not unlock");
 
-        //Last Show Proof successed! 获得奖励+增加积分
-        PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
-        _onProofSuccess(proof, publicDataInfo,dataMixedHash);
-    
-        //防止重入：反复领取奖励
-        proof.proofBlockHeight = 0;
+        if (block.number - proof.proofBlockHeight > sysConfig.showTimeout) {
+            //Last Show Proof successed! 获得奖励+增加积分
+            PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
+            _onProofSuccess(proof, publicDataInfo,dataMixedHash);
+        
+            //防止重入：反复领取奖励
+            proof.proofBlockHeight = 0;
+        }
     }
 
     function showData(bytes32 dataMixedHash, uint256 nonce_block, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata, ShowType showType) public {
@@ -530,7 +517,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
             require(block.number - nonce_block <= sysConfig.maxNonceBlockDistance, "invalid nonce block");
             isNewShow = true;
         } else {
-            require(block.timestamp - proof.proofBlockHeight <= sysConfig.showTimeout, "challenge timeout");
+            require(block.number - proof.proofBlockHeight <= sysConfig.showTimeout, "challenge timeout");
         }
     
         (bytes32 root_hash,) = _verifyDataProof(dataMixedHash,nonce_block,index,m_path,leafdata);
@@ -543,7 +530,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
             proof.lockedAmount = lockAmount;
             proof.nonceBlockHeight = nonce_block;
             proof.proofResult = root_hash;
-            proof.proofBlockHeight = block.timestamp;
+            proof.proofBlockHeight = block.number;
             proof.prover = msg.sender;
             //proof.showType = showType;
 
@@ -572,7 +559,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
 
                 proof.lockedAmount = lockAmount;
                 proof.proofResult = root_hash;
-                proof.proofBlockHeight = block.timestamp;
+                proof.proofBlockHeight = block.number;
                 proof.prover = msg.sender;
                 //proof.showType = showType;
             } 
@@ -588,7 +575,7 @@ contract PublicDataStorageV1 is Initializable, UUPSUpgradeable, OwnableUpgradeab
     function withdrawReward(uint256 cycleNumber, bytes32 dataMixedHash) public {
         // 判断这次的cycle已经结束
         //require(_currectCycle > cycleNumber, "cycle not finish");
-        require(block.timestamp > cycleNumber * sysConfig.blocksPerCycle + _startBlock, "cycle not finish");
+        require(block.number > cycleNumber * sysConfig.blocksPerCycle + _startBlock, "cycle not finish");
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
         //REVIEW:一次排序并保存的GAS和32次内存排序的成本问题？

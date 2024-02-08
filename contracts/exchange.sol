@@ -15,7 +15,6 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     mapping (bytes32 => uint256) _mintDMC;
 
     address mintAdmin;
-    uint256 version;
     function initialize(address _dmcToken, address _gwtToken) public initializer {
         __ExchangeUpgradable_init(_dmcToken, _gwtToken);
     }
@@ -26,17 +25,10 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         dmcToken = DMCToken(_dmcToken);
         gwtToken = GWTToken(_gwtToken);
         mintAdmin = msg.sender;
-        version = 1;
     }
 
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         
-    }
-
-    function updateV1(address _gwtToken) public onlyOwner {
-        require(version == 0, "already updated");
-        gwtToken = GWTToken(_gwtToken);
-        version = 1;
     }
 
     function setMintAdmin(address _mintAdmin) public onlyOwner {
