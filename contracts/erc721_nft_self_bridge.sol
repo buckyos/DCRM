@@ -3,41 +3,37 @@ pragma solidity ^0.8.0;
 
 import "./public_data_storage.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract ERC721NFTSelfBridge is IERCPublicDataContract {
-    IERC721 public nftAddress;
-    address public admin;
-
-    mapping (bytes32 => uint256) hashToTokenId;
-    mapping (bytes32 => bool) isInitialized;
-
-    constructor(IERC721 _nftAddress, address _admin, bytes32[] memory dataMixedHash, uint256[] memory tokenId) {
-        nftAddress = _nftAddress;
-        admin = _admin;
-        for (uint i = 0; i < dataMixedHash.length; i++) {
-            hashToTokenId[dataMixedHash[i]] = tokenId[i];
-            isInitialized[dataMixedHash[i]] = true;
-        }
+contract ERC721NFTSelfBridge is IERCPublicDataContract, Ownable {
+    struct NFTInfo {
+        uint256 tokenId;
+        address nftAddress;
+        bool inited;
     }
 
-    function setTokenId(bytes32[] calldata dataMixedHash, uint256[] calldata tokenId) public {
-        for (uint i = 0; i < dataMixedHash.length; i++) {
-            if (msg.sender != admin) {
-                require(!isInitialized[dataMixedHash[i]], "Already initialized");
-            }
+    mapping (bytes32 => NFTInfo) hashInfo;
 
-            hashToTokenId[dataMixedHash[i]] = tokenId[i];
-            if (!isInitialized[dataMixedHash[i]]) {
-                isInitialized[dataMixedHash[i]] = true;
+    constructor() Ownable(msg.sender) {
+    }
+
+    function setTokenId(bytes32[] calldata dataMixedHash, address[] calldata nftAddress, uint256[] calldata tokenId) public {
+        for (uint i = 0; i < dataMixedHash.length; i++) {
+            if (owner() != _msgSender()) {
+                require(!hashInfo[dataMixedHash[i]].inited, "Already initialized");
             }
+            require(IERC721(nftAddress[i]).supportsInterface(type(IERC721).interfaceId), "Not ERC721");
+
+            hashInfo[dataMixedHash[i]] = NFTInfo(tokenId[i], nftAddress[i], true);
         }
     }
 
     function getDataOwner(bytes32 dataMixedHash) public view returns (address) {
-        return nftAddress.ownerOf(hashToTokenId[dataMixedHash]);
+        NFTInfo memory info = hashInfo[dataMixedHash];
+        return IERC721(info.nftAddress).ownerOf(info.tokenId);
     }
 
-    function getTokenId(bytes32 dataMixedHash) public view returns (uint256, bool) {
-        return (hashToTokenId[dataMixedHash], isInitialized[dataMixedHash]);
+    function getTokenId(bytes32 dataMixedHash) public view returns (NFTInfo memory) {
+        return hashInfo[dataMixedHash];
     }
 }
