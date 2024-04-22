@@ -1,8 +1,9 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract DividendContract {
+contract DividendContract is ReentrancyGuard {
     address public stakingToken;
     uint256 public cycleLength;
     uint256 public cycleStartBlock;
@@ -25,7 +26,7 @@ contract DividendContract {
         mapping(address => bool) settled;
 
         // the cycle is settled or not
-        bool settled;
+        bool cycleSettled;
     }
 
     // the cycle info of the contract
@@ -33,6 +34,9 @@ contract DividendContract {
 
     // the dividend info of the user that already settled but not withdraw yet
     mapping(address => RewardInfo[]) public dividends;
+
+    event Deposit(uint256 amount, address token);
+    event Stake(address indexed user, uint256 amount);
 
 
     constructor(address _stakingToken, uint256 _cycleLength) {
@@ -45,7 +49,7 @@ contract DividendContract {
         return (block.number - cycleStartBlock) / cycleLength;
     }
 
-    function getCurrentCycle() public view returns (CycleInfo storage) {
+    function getCurrentCycle() internal returns (CycleInfo storage) {
         uint256 currentCycleIndex = getCurrentCycleIndex();
         if (cycles.length <= currentCycleIndex) {
             cycles.push();
@@ -53,7 +57,7 @@ contract DividendContract {
         return cycles[currentCycleIndex];
     }
 
-    function getNextCycle() public view returns (CycleInfo storage) {
+    function getNextCycle() internal returns (CycleInfo storage) {
         uint256 currentCycleIndex = getCurrentCycleIndex();
         if (cycles.length <= currentCycleIndex + 1) {
             cycles.push();
@@ -88,7 +92,7 @@ contract DividendContract {
         require(token != address(stakingToken), "Cannot deposit Staking token");
         require(token != address(0), "Use native transfer to deposit ETH");
 
-        IERC20Upgradeable(token).transferFrom(msg.sender, address(this), amount);
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
 
         _depositToken(token, amount);
     }
@@ -102,7 +106,7 @@ contract DividendContract {
             balance = address(this).balance;
         } else {
             // If the token address is not 0, return the ERC20 token balance of the contract
-            balance = IERC20Upgradeable(token).balanceOf(address(this));
+            balance = IERC20(token).balanceOf(address(this));
         }
 
         // find the token in the rewards array and update the amount
@@ -122,7 +126,7 @@ contract DividendContract {
     // stake tokens to next cycle
     function stake(uint256 amount) external nonReentrant {
         require(amount > 0, "Cannot stake 0");
-        require(IERC20Upgradeable(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
+        require(IERC20(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
 
         CycleInfo storage cycle = getNextCycle();
 
@@ -162,7 +166,7 @@ contract DividendContract {
             nextCycle.staked[msg.sender] -= (amount - currentCycleStaked);
         }
 
-        require(IERC20Upgradeable(stakingToken).transfer(msg.sender, amount), "Withdraw failed");
+        require(IERC20(stakingToken).transfer(msg.sender, amount), "Withdraw failed");
     }
 
 
@@ -184,15 +188,15 @@ contract DividendContract {
 
         // if the previous cycle is already settled, return directly
         uint256 prevCycleIndex = currentCycleIndex - 1;
-        if (cycles[prevCycleIndex].settled) {
+        if (cycles[prevCycleIndex].cycleSettled) {
             return;
         }
 
         // find the first unsettled cycle from front to back
-        while (prevCycleIndex > 0 && !cycles[prevCycleIndex].settled) {
+        while (prevCycleIndex > 0 && !cycles[prevCycleIndex].cycleSettled) {
             prevCycleIndex--;
         }
-        if (cycles[prevCycleIndex].settled) {
+        if (cycles[prevCycleIndex].cycleSettled) {
             prevCycleIndex++;
         }
 
@@ -208,8 +212,8 @@ contract DividendContract {
         CycleInfo storage lastSettledCycle = cycles[index];
         CycleInfo storage currentCycle = cycles[index + 1];
 
-        require(lastSettledCycle.settled == false, "Cycle already settled");
-        require(currentCycle.settled == false, "Cycle already settled");
+        require(lastSettledCycle.cycleSettled == false, "Cycle already settled");
+        require(currentCycle.cycleSettled == false, "Cycle already settled");
         require(index < getCurrentCycleIndex(), "Cannot claim current cycle");
 
         // if the last settled cycle has staked amount, transfer the staked amount to the current cycle
@@ -240,7 +244,7 @@ contract DividendContract {
             }
         }
 
-        lastSettledCycle.settled = true;
+        lastSettledCycle.cycleSettled = true;
     }
 
     // check if the user has settled the rewards for the cycle
