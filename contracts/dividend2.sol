@@ -26,6 +26,7 @@ contract Dividend2 {
     struct UserStackLog {
         uint256 cycleNumber;
         uint256 amount;
+        uint256 addAmount;
     }
 
     mapping(uint256 => DividendInfo) dividends;
@@ -41,13 +42,10 @@ contract Dividend2 {
         startBlock = block.number;
     }
 
-    function _curCycleNumber() internal view returns (uint256) {
-        return lastCycleNumber;
-    }
-
+    // TODO：可能改成uint256[] cycleNumbers，返回uint256[]更好，考虑到withdraw的大多数调用情况应该是一次提取多个周期
     function _getStack(address user, uint256 cycleNumber) internal view returns (uint256) {
         UserStackLog[] memory logs = userStackLog[user];
-        for (uint i = logs.length-1; i < logs.length; i--) {
+        for (uint i = logs.length-1; i >= 0; i--) {
             if (logs[i].cycleNumber <= cycleNumber) {
                 return logs[i].amount;
             }
@@ -59,18 +57,19 @@ contract Dividend2 {
     // 质押
     function stake(uint256 amount) public {
         dmcToken.transferFrom(msg.sender, address(this), amount);
-        uint256 cycleNumber = _curCycleNumber();
+        uint256 nextCycle = lastCycleNumber + 1;
 
         UserStackLog[] storage logs = userStackLog[msg.sender];
 
         if (logs.length == 0) {
-            logs.push(UserStackLog(cycleNumber, amount));
+            logs.push(UserStackLog(nextCycle, amount, amount));
         } else {
             UserStackLog storage lastLog = logs[logs.length-1];
-            if (lastLog.cycleNumber == cycleNumber) {
+            if (lastLog.cycleNumber == nextCycle) {
                 lastLog.amount += amount;
+                lastLog.addAmount += amount;
             } else {
-                logs.push(UserStackLog(cycleNumber, lastLog.amount + amount));
+                logs.push(UserStackLog(nextCycle, lastLog.amount + amount, amount));
             }
         }
 
@@ -87,16 +86,46 @@ contract Dividend2 {
         require(lastLog.amount >= amount, "not enough deposit");
         
         dmcToken.transfer(msg.sender, amount);
-        uint256 cycleNumber = _curCycleNumber();
-        if (lastLog.cycleNumber == cycleNumber) {
-            lastLog.amount -= amount;
+        uint256 nextCycle = lastCycleNumber + 1;
+
+        if (lastLog.cycleNumber == nextCycle) {
+            
+            if (lastLog.addAmount >= amount) {
+                lastLog.amount -= amount;
+                lastLog.addAmount -= amount;
+            } else {
+                uint256 diff = amount - lastLog.addAmount;
+
+                // 从上一个周期扣amount的差值, 能走到这里，一定说明至少有两个周期，否则不会出现lastLog.amount >= amount 且 lastLog.addAmount < amount的情况
+                UserStackLog memory lastLastLog = logs[logs.length-2];
+                
+                // 假设当前是周期3，用户在周期1存了50，周期3存了20，又提取了45
+                // 这里的Log要从[{2, 50, 50}, {4, 70, 20}]变成[{2, 50, 50}, {3, 25, 25}, {4, 25, 0}]
+                if (lastLastLog.cycleNumber != nextCycle - 1) {
+                    // 4 -> 3
+                    lastLog.cycleNumber = nextCycle - 1;
+                    // 70 -> 25 = 50 - (45 - 20)
+                    lastLog.amount = lastLastLog.amount - diff;
+                    // addAmount不改了，因为这个值在非lastLog的位置并没有意义
+
+                    logs.push(UserStackLog(nextCycle, lastLog.amount, 0));
+                } else {
+                    // 假设用户在周期2存了50，周期3存了20，又提取了45
+                    // 这里的原log为[{3, 50, 50}, {4, 70, 20}]，变成[{3, 25, 25}, {4, 25, 0}]
+                    lastLastLog.amount -= diff;
+                    // addAmount不改了，因为这个值在非lastLog的位置并没有意义
+                    lastLog.amount -= amount;
+                    // 这里的addAmount就必须要改
+                    lastLog.addAmount = 0;
+                }
+                
+                dividends[lastLog.cycleNumber].totalDeposits -= diff;
+            }
         } else {
-            logs.push(UserStackLog(cycleNumber, lastLog.amount - amount));
+            logs.push(UserStackLog(cycleNumber, lastLog.amount - amount, 0));
         }
 
         totalDeposits -= amount;
-
-        dividends[cycleNumber].totalDeposits -= amount;
     }
 
     function _settleCycle() internal {
@@ -132,7 +161,7 @@ contract Dividend2 {
         }
 
         IERC20(token).transferFrom(msg.sender, address(this), amount);
-        uint256 cycleNumber = _curCycleNumber();
+        uint256 cycleNumber = lastCycleNumber;
         TokenIncome[] storage incomes = dividends[cycleNumber].incomes;
         if (incomes.length == 0) {
             dividends[cycleNumber].incomes.push(TokenIncome(token, amount));
@@ -164,6 +193,7 @@ contract Dividend2 {
             uint256 userStack = _getStack(msg.sender, cycleNumber);
             console.log("get stack %d at cycle %d", userStack, cycleNumber);
             console.log("get total stack %d at cycle %d", info.totalDeposits, cycleNumber);
+            require(userStack > 0, "cannot withdraw");
             for (uint256 i = 0; i < info.incomes.length; i++) {
                 uint256 amount = info.incomes[i].amount * userStack / info.totalDeposits;
                 console.log("total %d, withdraw %d", info.incomes[i].amount, amount);

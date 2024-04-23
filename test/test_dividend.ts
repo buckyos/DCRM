@@ -30,39 +30,50 @@ describe("Devidend", function () {
 
     })
 
-    it("test", async () => {
+    it("test cycle 0", async () => {
+        // 初始周期0
         mine(1000);
-        // 打入收入100 GWT, 前进到周期1
+    });
+
+    it("test cycle 1", async () => {
+        // 打入100 GWT, 前进到周期1
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
         // 第1周期，signers1，2抵押50 DMC
         await (await dividend.connect(signers[1]).stake(50)).wait()
         await (await dividend.connect(signers[2]).stake(50)).wait()
-        
-        // 又打入100 GWT，前进到周期2, 此时总分红200 GWT
-        
+
         mine(1000);
+    });
+
+    it("test cycle 2", async () => {
+        // 又打入100 GWT，前进到周期2, 此时总分红200 GWT
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
-        //await (await dividend.settleDevidend(1)).wait()
 
         // 因为周期1开始时没有已确定的抵押，周期1的分红是提不到的
-        expect(dividend.connect(signers[1]).withdraw([1])).to.be.revertedWith("no dividend");
+        expect(dividend.connect(signers[1]).withdraw([1])).to.be.revertedWith("cannot withdraw");
 
-        // 前进到周期3，周期2的分红200 GWT,周期3的分红100 GWT
         mine(1000);
+    });
+
+    it("test cycle 3", async () => {
+        // 前进到周期3，周期2的分红200 GWT,周期3的分红100 GWT
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
         // 此时提现周期2的，应该能提到100 GWT
         await (await dividend.connect(signers[1]).withdraw([2]));
         expect(await gwt.balanceOf(signers[1].address)).to.equal(100);
         
-        // 周期3，signer1提取25 DMC出来
-        await (await dividend.connect(signers[1]).unStake(25)).wait();
+        // 周期3，signer1先存20， 再提取45 DMC出来
+        await (await dividend.connect(signers[1]).stake(20)).wait();
+        await (await dividend.connect(signers[1]).unStake(45)).wait();
 
-        // 强制结算周期3，进入周期4
         mine(1000);
+    });
+
+    it("test cycle 4", async () => {
+        // 强制结算周期3，进入周期4
         await (await dividend.deposit(0, ethers.ZeroAddress)).wait();
-        //await (await dividend.settleDevidend(2)).wait()
 
         // 此时提现周期3的，应该能提到33 GWT
         await (await dividend.connect(signers[1]).withdraw([3]));
