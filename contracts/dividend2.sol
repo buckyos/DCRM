@@ -45,9 +45,15 @@ contract Dividend2 {
     // TODO：可能改成uint256[] cycleNumbers，返回uint256[]更好，考虑到withdraw的大多数调用情况应该是一次提取多个周期
     function _getStack(address user, uint256 cycleNumber) internal view returns (uint256) {
         UserStackLog[] memory logs = userStackLog[user];
-        for (uint i = logs.length-1; i >= 0; i--) {
+        if (logs.length == 0) {
+            return 0;
+        }
+        for (uint i = logs.length-1; ; i--) {
             if (logs[i].cycleNumber <= cycleNumber) {
                 return logs[i].amount;
+            }
+            if (i == 0) {
+                break;
             }
         }
 
@@ -122,7 +128,7 @@ contract Dividend2 {
                 dividends[lastLog.cycleNumber].totalDeposits -= diff;
             }
         } else {
-            logs.push(UserStackLog(cycleNumber, lastLog.amount - amount, 0));
+            logs.push(UserStackLog(nextCycle, lastLog.amount - amount, 0));
         }
 
         totalDeposits -= amount;
