@@ -1,5 +1,5 @@
 import { ethers, upgrades } from "hardhat"
-import { DMC2, GWTToken2, DividendContract } from "../typechain-types"
+import { DMC2, GWTToken2, Dividend2 } from "../typechain-types"
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from "chai";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
@@ -7,7 +7,7 @@ import { mine } from "@nomicfoundation/hardhat-network-helpers";
 describe("Devidend", function () {
     let dmc: DMC2
     let gwt: GWTToken2
-    let dividend: DividendContract;
+    let dividend: Dividend2;
     let signers: HardhatEthersSigner[];
 
     before(async () => {
@@ -15,7 +15,7 @@ describe("Devidend", function () {
 
         dmc = await (await ethers.deployContract("DMC2", [ethers.parseEther("1000000000"), [signers[0].address], [1000000]])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWTToken2")).waitForDeployment()
-        dividend = await (await ethers.deployContract("DividendContract", [await dmc.getAddress(), 100])).waitForDeployment()
+        dividend = await (await ethers.deployContract("Dividend2", [await dmc.getAddress(), 1000])).waitForDeployment()
 
         // 给signers[0] 1000个GWT
         await (await gwt.enableMinter([signers[0].address])).wait()
@@ -31,47 +31,45 @@ describe("Devidend", function () {
     })
 
     it("test", async () => {
-        // 第0周期，打入收入100 GWT
+        mine(1000);
+        // 打入收入100 GWT, 前进到周期1
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
-        // 第0周期，signers1，2抵押50 DMC
+        // 第1周期，signers1，2抵押50 DMC
         await (await dividend.connect(signers[1]).stake(50)).wait()
         await (await dividend.connect(signers[2]).stake(50)).wait()
-
-        // 前进到第一周期
-        mine(100);
-
-        // 第一周期，第0周期的人是提不到分红的，100 GWT归入此周期
-        //await (await dividend.settleDevidend(0)).wait()
-
-        // 尝试提取分红，应该是提不到的
-        await (await dividend.connect(signers[1]).withdrawDividend());
-        expect(await gwt.balanceOf(signers[1].address)).to.equal(0);
         
-        // 直接前进到第二周期
-        mine(100);
-        await (await dividend.settleDevidend(1)).wait()
+        // 又打入100 GWT，前进到周期2, 此时总分红200 GWT
+        
+        mine(1000);
+        await (await dividend.deposit(100, await gwt.getAddress())).wait();
+        //await (await dividend.settleDevidend(1)).wait()
 
-        // 此时提现第一周期的，应该能提到50 GWT
-        await (await dividend.connect(signers[1]).withdrawDividend());
-        expect(await gwt.balanceOf(signers[1].address)).to.equal(50);
+        // 因为周期1开始时没有已确定的抵押，周期1的分红是提不到的
+        expect(dividend.connect(signers[1]).withdraw([1])).to.be.revertedWith("no dividend");
 
-        // 第二周期，又打入100 GWT
+        // 前进到周期3，周期2的分红200 GWT,周期3的分红100 GWT
+        mine(1000);
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
-        // 第二周期，signer1提取25 DMC出来
-        await (await dividend.connect(signers[1]).withdraw(25)).wait();
+        // 此时提现周期2的，应该能提到100 GWT
+        await (await dividend.connect(signers[1]).withdraw([2]));
+        expect(await gwt.balanceOf(signers[1].address)).to.equal(100);
+        
+        // 周期3，signer1提取25 DMC出来
+        await (await dividend.connect(signers[1]).unStake(25)).wait();
 
-        // 前进到第三周期
-        mine(100);
-        await (await dividend.settleDevidend(2)).wait()
+        // 强制结算周期3，进入周期4
+        mine(1000);
+        await (await dividend.deposit(0, ethers.ZeroAddress)).wait();
+        //await (await dividend.settleDevidend(2)).wait()
 
-        // 此时提现第二周期的，应该能提到33 GWT
-        await (await dividend.connect(signers[1]).withdrawDividend());
-        expect(await gwt.balanceOf(signers[1].address)).to.equal(83);
+        // 此时提现周期3的，应该能提到33 GWT
+        await (await dividend.connect(signers[1]).withdraw([3]));
+        expect(await gwt.balanceOf(signers[1].address)).to.equal(133);
 
-        // signers2提取两个周期的分红，应该能提到50+66=116 GWT
-        await (await dividend.connect(signers[2]).withdrawDividend());
-        expect(await gwt.balanceOf(signers[2].address)).to.equal(116);
+        // signers2提取两个周期的分红，应该能提到100+66=166 GWT
+        await (await dividend.connect(signers[2]).withdraw([2,3]));
+        expect(await gwt.balanceOf(signers[2].address)).to.equal(166);
     })
 })
