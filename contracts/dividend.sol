@@ -3,6 +3,8 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+import "hardhat/console.sol";
+
 contract DividendContract is ReentrancyGuard {
     address public stakingToken;
 
@@ -35,7 +37,8 @@ contract DividendContract is ReentrancyGuard {
     uint256 public totalStaked;
 
     // the cycle info of the contract
-    CycleInfo[] public cycles;
+    //CycleInfo[] public cycles;
+    mapping(uint256 => CycleInfo) public cycles;
 
     // the staking record of the user
     struct StakeRecord {
@@ -64,11 +67,12 @@ contract DividendContract is ReentrancyGuard {
         return currentCycleIndex;
     }
 
-    function getCurrentCycle() public view returns (CycleInfo storage) {
+    function getCurrentCycle() internal returns (CycleInfo storage) {
+        /*
         uint256 currentCycleIndex = getCurrentCycleIndex();
         if (cycles.length <= currentCycleIndex) {
-            cycles.push();
-        }
+            cycles.push(CycleInfo(block.number, 0, new RewardInfo[](0)));
+        }*/
         return cycles[currentCycleIndex];
     }
 
@@ -109,11 +113,15 @@ contract DividendContract is ReentrancyGuard {
 
     function getStakedAmount(address user, uint256 cycleIndex) public view returns (uint256) {
         StakeRecord[] memory stakeRecords = UserStakeRecords[user];
-        for (uint i = stakeRecords.length - 1; i != uint(-1); i--) {
+        for (uint i = stakeRecords.length - 1; ; i--) {
 
             // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，所以需要进入下一个周期才会生效，所以这里使用 < 而不是 <=
             if (stakeRecords[i].cycleIndex < cycleIndex) {
                 return stakeRecords[i].amount;
+            }
+
+            if (i == 0) {
+                break;
             }
         }
 
@@ -131,7 +139,7 @@ contract DividendContract is ReentrancyGuard {
         if (stakeRecords.length == 0) {
             stakeRecords.push(StakeRecord(currentCycleIndex, amount, amount));
         } else {
-            StackRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
+            StakeRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
             if (lastStakeRecord.cycleIndex == currentCycleIndex) {
                 lastStakeRecord.amount += amount;
                 lastStakeRecord.newAmount += amount;
@@ -154,18 +162,18 @@ contract DividendContract is ReentrancyGuard {
         require(stakeRecords.length > 0, "No stake record found");
         
         // get the last stake record of the user
-        StackRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
+        StakeRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
         require(lastStakeRecord.amount >= amount, "Insufficient staked amount");
 
         // 如果存在当前周期的质押操作，那么这个质押操作是可以直接撤销的不影响周期数据(当前质押要在下个周期进入cycleInfo中)
         // 如果不是当前周期的质押操作，或者当前周期的质押数量不足，那么这个质押操作是需要从上个周期关联的cycleInfo数据中减去的
         uint256 currentCycleIndex = getCurrentCycleIndex();
         if (lastStakeRecord.cycleIndex == currentCycleIndex) {
-            if (lastStakeRecord.addAmount >= amount) {
+            if (lastStakeRecord.newAmount >= amount) {
                 lastStakeRecord.amount -= amount;
-                lastStakeRecord.addAmount -= amount;
+                lastStakeRecord.newAmount -= amount;
             } else {
-                uint256 diff = amount - lastStakeRecord.addAmount;
+                uint256 diff = amount - lastStakeRecord.newAmount;
 
                 StakeRecord memory prevStakeRecord = stakeRecords[stakeRecords.length - 2];
                 
@@ -196,7 +204,7 @@ contract DividendContract is ReentrancyGuard {
         CycleInfo storage currentCycle = getCurrentCycle();
         if (currentBlock - currentCycle.startBlock >= cycleMaxLength) {
             currentCycleIndex = currentCycleIndex + 1;
-
+            console.log("enter new cycle %d", currentCycleIndex);
             CycleInfo storage newCycle = cycles[currentCycleIndex];
             newCycle.startBlock = currentBlock;
             newCycle.totalStaked = totalStaked;
@@ -210,17 +218,18 @@ contract DividendContract is ReentrancyGuard {
     }
 
     // check if the user has settled the rewards for the cycle
-    function isDividendWithdrawed(address user, uint256 cycleIndex, uint256 token) public view returns (bool) {
+    function isDividendWithdrawed(address user, uint256 cycleIndex, address token) public view returns (bool) {
         bytes32 key = keccak256(abi.encodePacked(user, cycleIndex, token));
         return withdrawDividendState[key];
     }
 
     // claim rewards for the cycle
-    function withdrawDevidends(uint256[] cycleIndexs, uint256[] tokens) external nonReentrant {
+    function withdrawDevidends(uint256[] calldata cycleIndexs, address[] calldata tokens) external nonReentrant {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
 
-        RewardInfo[] storage rewards = [];
+        RewardInfo[] memory rewards = new RewardInfo[](cycleIndexs.length*tokens.length);
+        uint256 realRewardLength = 0;
 
         for (uint i = 0; i < cycleIndexs.length; i++) {
             uint256 cycleIndex = cycleIndexs[i];
@@ -228,7 +237,7 @@ contract DividendContract is ReentrancyGuard {
 
             // withdraw every token
             for (uint j = 0; j < tokens.length; j++) {
-                uint256 token = tokens[j];
+                address token = tokens[j];
                 require(!isDividendWithdrawed(msg.sender, cycleIndex, token), "Already claimed");
 
                 CycleInfo storage cycle = cycles[cycleIndex];
@@ -251,7 +260,8 @@ contract DividendContract is ReentrancyGuard {
                 }
 
                 if (rewardAmount > 0) {
-                    rewards.push(RewardInfo(token, rewardAmount));
+                    rewards[realRewardLength++] = RewardInfo(token, rewardAmount);
+                    //rewards.push(RewardInfo(token, rewardAmount));
                 }
 
                 // set the withdraw state of the user and the cycle and the token
@@ -261,8 +271,8 @@ contract DividendContract is ReentrancyGuard {
         }
 
         // do the transfer
-        for (uint i = 0; i < rewards.length; i++) {
-            RewardInfo storage reward = rewards[i];
+        for (uint i = 0; i < realRewardLength; i++) {
+            RewardInfo memory reward = rewards[i];
             if (reward.token == address(0)) {
                 payable(msg.sender).transfer(reward.amount);
             } else {

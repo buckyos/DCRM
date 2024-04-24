@@ -1,5 +1,5 @@
 import { ethers, upgrades } from "hardhat"
-import { DMC2, GWTToken2, Dividend2 } from "../typechain-types"
+import { DMC2, GWTToken2, Dividend2, DividendContract } from "../typechain-types"
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from "chai";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
@@ -7,7 +7,8 @@ import { mine } from "@nomicfoundation/hardhat-network-helpers";
 describe("Devidend", function () {
     let dmc: DMC2
     let gwt: GWTToken2
-    let dividend: Dividend2;
+    //let dividend: Dividend2;
+    let dividend: DividendContract;
     let signers: HardhatEthersSigner[];
 
     before(async () => {
@@ -15,7 +16,8 @@ describe("Devidend", function () {
 
         dmc = await (await ethers.deployContract("DMC2", [ethers.parseEther("1000000000"), [signers[0].address], [1000000]])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWTToken2")).waitForDeployment()
-        dividend = await (await ethers.deployContract("Dividend2", [await dmc.getAddress(), 1000])).waitForDeployment()
+        //dividend = await (await ethers.deployContract("Dividend2", [await dmc.getAddress(), 1000])).waitForDeployment()
+        dividend = await(await ethers.deployContract("DividendContract", [await dmc.getAddress(), 1000])).waitForDeployment();
 
         // 给signers[0] 1000个GWT
         await (await gwt.enableMinter([signers[0].address])).wait()
@@ -23,7 +25,7 @@ describe("Devidend", function () {
         await (await gwt.approve(await dividend.getAddress(), 1000)).wait()
 
         // 给signers[1]到19, 每人100个DMC
-        for (let i = 1; i < 20; i++) {
+        for (let i = 1; i < 3; i++) {
             await (await dmc.transfer(signers[i].address, 100)).wait()
             await (await dmc.connect(signers[i]).approve(await dividend.getAddress(), 100)).wait()
         }
@@ -51,7 +53,7 @@ describe("Devidend", function () {
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
         // 因为周期1开始时没有已确定的抵押，周期1的分红是提不到的
-        expect(dividend.connect(signers[1]).withdraw([1])).to.be.revertedWith("cannot withdraw");
+        expect(dividend.connect(signers[1]).withdrawDevidends([1], [await gwt.getAddress()])).to.be.revertedWith("cannot withdraw");
 
         mine(1000);
     });
@@ -61,12 +63,12 @@ describe("Devidend", function () {
         await (await dividend.deposit(100, await gwt.getAddress())).wait();
 
         // 此时提现周期2的，应该能提到100 GWT
-        await (await dividend.connect(signers[1]).withdraw([2]));
+        await (await dividend.connect(signers[1]).withdrawDevidends([2], [await gwt.getAddress()]));
         expect(await gwt.balanceOf(signers[1].address)).to.equal(100);
         
         // 周期3，signer1先存20， 再提取45 DMC出来
         await (await dividend.connect(signers[1]).stake(20)).wait();
-        await (await dividend.connect(signers[1]).unStake(45)).wait();
+        await (await dividend.connect(signers[1]).unstake(45)).wait();
 
         mine(1000);
     });
@@ -76,11 +78,11 @@ describe("Devidend", function () {
         await (await dividend.deposit(0, ethers.ZeroAddress)).wait();
 
         // 此时提现周期3的，应该能提到33 GWT
-        await (await dividend.connect(signers[1]).withdraw([3]));
+        await (await dividend.connect(signers[1]).withdrawDevidends([3], [await gwt.getAddress()]));
         expect(await gwt.balanceOf(signers[1].address)).to.equal(133);
 
         // signers2提取两个周期的分红，应该能提到100+66=166 GWT
-        await (await dividend.connect(signers[2]).withdraw([2,3]));
+        await (await dividend.connect(signers[2]).withdrawDevidends([2,3], [await gwt.getAddress()]));
         expect(await gwt.balanceOf(signers[2].address)).to.equal(166);
     })
 })

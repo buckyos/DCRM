@@ -26,7 +26,6 @@ contract Dividend2 {
     struct UserStackLog {
         uint256 cycleNumber;
         uint256 amount;
-        uint256 addAmount;
     }
 
     mapping(uint256 => DividendInfo) dividends;
@@ -68,14 +67,13 @@ contract Dividend2 {
         UserStackLog[] storage logs = userStackLog[msg.sender];
 
         if (logs.length == 0) {
-            logs.push(UserStackLog(nextCycle, amount, amount));
+            logs.push(UserStackLog(nextCycle, amount));
         } else {
             UserStackLog storage lastLog = logs[logs.length-1];
             if (lastLog.cycleNumber == nextCycle) {
                 lastLog.amount += amount;
-                lastLog.addAmount += amount;
             } else {
-                logs.push(UserStackLog(nextCycle, lastLog.amount + amount, amount));
+                logs.push(UserStackLog(nextCycle, lastLog.amount + amount));
             }
         }
 
@@ -94,13 +92,21 @@ contract Dividend2 {
         dmcToken.transfer(msg.sender, amount);
         uint256 nextCycle = lastCycleNumber + 1;
 
+        // addAmount可以从last - lastlast的差值得到，就不需要再存一份了
         if (lastLog.cycleNumber == nextCycle) {
-            
-            if (lastLog.addAmount >= amount) {
-                lastLog.amount -= amount;
-                lastLog.addAmount -= amount;
+            uint256 addAmount = 0;
+            if (logs.length > 1) {
+                if (logs[logs.length-2].amount > lastLog.amount) {
+                    addAmount = logs[logs.length-2].amount - lastLog.amount;
+                }
             } else {
-                uint256 diff = amount - lastLog.addAmount;
+                addAmount = lastLog.amount;
+            }
+
+            if (addAmount >= amount) {
+                lastLog.amount -= amount;
+            } else {
+                uint256 diff = amount - addAmount;
 
                 // 从上一个周期扣amount的差值, 能走到这里，一定说明至少有两个周期，否则不会出现lastLog.amount >= amount 且 lastLog.addAmount < amount的情况
                 UserStackLog memory lastLastLog = logs[logs.length-2];
@@ -112,23 +118,19 @@ contract Dividend2 {
                     lastLog.cycleNumber = nextCycle - 1;
                     // 70 -> 25 = 50 - (45 - 20)
                     lastLog.amount = lastLastLog.amount - diff;
-                    // addAmount不改了，因为这个值在非lastLog的位置并没有意义
 
-                    logs.push(UserStackLog(nextCycle, lastLog.amount, 0));
+                    logs.push(UserStackLog(nextCycle, lastLog.amount));
                 } else {
                     // 假设用户在周期2存了50，周期3存了20，又提取了45
                     // 这里的原log为[{3, 50, 50}, {4, 70, 20}]，变成[{3, 25, 25}, {4, 25, 0}]
                     lastLastLog.amount -= diff;
-                    // addAmount不改了，因为这个值在非lastLog的位置并没有意义
                     lastLog.amount -= amount;
-                    // 这里的addAmount就必须要改
-                    lastLog.addAmount = 0;
                 }
                 
                 dividends[lastLog.cycleNumber].totalDeposits -= diff;
             }
         } else {
-            logs.push(UserStackLog(nextCycle, lastLog.amount - amount, 0));
+            logs.push(UserStackLog(nextCycle, lastLog.amount - amount));
         }
 
         totalDeposits -= amount;
