@@ -151,6 +151,12 @@ def reward(self, capacity, duration,is_supply,order):
 
 销毁DMC得到的GWT的数量，与系统当前的总存储能力和当前周期的期望兑换总数有关。系统的总存储量越大，兑换得到的GWT也就越多。系统会记录一个周期内销毁DMC得到的GWT总量，销毁的DMC越多，说明得到GWT的愿望约强烈，系统会进一步提升单个DMC兑换GWT的比例以尽快满足GWT的流动性需求。
 
+系统的总空间（定期同步）
+当前的GWT总量
+上个周期销毁的DMC总数，上个周期的总长度
+上个周期销毁的DMC总量变化（增加或减少的百分比）
+与当前的兑换DMC的比例比较，>=1.1 (至少多10%)
+
 
 ### 用GWT兑换未分配的DMC20
 
@@ -159,6 +165,45 @@ DMC20按周期释放，一个周期的DMC20兑换完成后会自动进入下一�
 兑换DMC20的GWT会和GWT手续费一样，进入GWT分红/销毁池。
 
 如果先兑换GWT得到DMC20，再销毁DMC20来得到GWT，通常是不划算的。但如果在早期先得到DMC20，持有一段时间后再销毁，正常会得到更多的GWT。
+
+当前周期的DMC释放量 （上周期未兑换完量+本周期释放量）
+上周期兑换剩余的DMC量（百分比）
+得到当前周期的DMC兑换比例
+
+```python
+def exchange(self, gwt):
+    先判断是否需要移动到下一个周期
+    如果要：
+        结算当前周期
+        移动到下一个周期
+
+    # 通过GWT兑换DMC20
+    real_dmc_count = 0
+    dmc_count = gwt / get_exchange_rate()
+    if dmc_count > 本阶段DMC可释放余额:
+        本阶段DMC可释放余额 = 0
+        real_dmc_count = 本阶段DMC可释放余额
+    else:
+        本阶段DMC可释放余额 -= dmc_count
+        real_dmc_count = dmc_count
+
+
+def 结算当前周期
+
+
+def 移动到下一个周期
+    本期额为兑换量 = 未兑换总量/未兑换周期总数
+    未兑换总量 = 未兑换总量 - 未兑换总量/未兑换周期总数
+    本周期DMC可释放余额 = 未本期额为兑换量 + 本周期计划释放量
+    exchange_rate = last_exchange_rate * （1-上期未兑换量/上期总兑换量）
+
+
+def 销毁dmc(self,dmc_count):
+    （系统总空间 / 已释放DMC） * 20
+     
+
+```
+
 
 ## DMC DAO的治理
 
