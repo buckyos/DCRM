@@ -78,16 +78,19 @@ contract Dividend2 {
         }
 
         totalDeposits += amount;
-        console.log("total deposit %d", totalDeposits);
+        console.log("user %s add deposit %d, his deposit %d", msg.sender, amount, logs[logs.length-1].amount);
+        console.log("total deposti %d", totalDeposits);
     }
 
     // 提取
-    function unStake(uint256 amount) public {
+    function unstake(uint256 amount) public {
         UserStackLog[] storage logs = userStackLog[msg.sender];
         require(logs.length > 0, "no deposit");
 
         UserStackLog storage lastLog = logs[logs.length-1];
         require(lastLog.amount >= amount, "not enough deposit");
+
+        console.log("user %s will unstack %d, his deposit %d", msg.sender, amount, lastLog.amount);
         
         dmcToken.transfer(msg.sender, amount);
         uint256 nextCycle = lastCycleNumber + 1;
@@ -96,37 +99,43 @@ contract Dividend2 {
         if (lastLog.cycleNumber == nextCycle) {
             uint256 addAmount = 0;
             if (logs.length > 1) {
-                if (logs[logs.length-2].amount > lastLog.amount) {
-                    addAmount = logs[logs.length-2].amount - lastLog.amount;
+                console.log("found prev log cycle %d, amount %d", logs[logs.length-2].cycleNumber, logs[logs.length-2].amount);
+                if (logs[logs.length-2].amount < lastLog.amount) {
+                    addAmount = lastLog.amount - logs[logs.length-2].amount;
                 }
             } else {
                 addAmount = lastLog.amount;
             }
-
+            // amount = 45, addAmount = 20
             if (addAmount >= amount) {
                 lastLog.amount -= amount;
             } else {
+                // diff = 25
                 uint256 diff = amount - addAmount;
+                console.log("amount %d, addAmount %d, diff %d", amount, addAmount, diff);
 
                 // 从上一个周期扣amount的差值, 能走到这里，一定说明至少有两个周期，否则不会出现lastLog.amount >= amount 且 lastLog.addAmount < amount的情况
                 UserStackLog memory lastLastLog = logs[logs.length-2];
                 
                 // 假设当前是周期3，用户在周期1存了50，周期3存了20，又提取了45
-                // 这里的Log要从[{2, 50, 50}, {4, 70, 20}]变成[{2, 50, 50}, {3, 25, 25}, {4, 25, 0}]
+                // 这里的Log要从[{2, 50}, {4, 70}]变成[{2, 50}, {3, 25}, {4, 25}]
                 if (lastLastLog.cycleNumber != nextCycle - 1) {
                     // 4 -> 3
+                    console.log("change last log cycle %d -> %d", lastLog.cycleNumber, nextCycle - 1);
                     lastLog.cycleNumber = nextCycle - 1;
-                    // 70 -> 25 = 50 - (45 - 20)
+                    // 70 -> 25 = 50 - 25
+                    console.log("change last log amount %d -> %d", lastLog.amount, lastLog.amount - diff);
                     lastLog.amount = lastLastLog.amount - diff;
-
+                    console.log("push new log (%d, %d)", nextCycle, lastLog.amount);
                     logs.push(UserStackLog(nextCycle, lastLog.amount));
                 } else {
                     // 假设用户在周期2存了50，周期3存了20，又提取了45
-                    // 这里的原log为[{3, 50, 50}, {4, 70, 20}]，变成[{3, 25, 25}, {4, 25, 0}]
+                    // 这里的原log为[{3, 50}, {4, 70}]，变成[{3, 25}, {4, 25}]
                     lastLastLog.amount -= diff;
                     lastLog.amount -= amount;
                 }
-                
+                console.log("diff %d", diff);
+                console.log("change cycle %d total deposit %d -> %d", lastLog.cycleNumber, dividends[lastLog.cycleNumber].totalDeposits, dividends[lastLog.cycleNumber].totalDeposits - diff);
                 dividends[lastLog.cycleNumber].totalDeposits -= diff;
             }
         } else {
@@ -134,23 +143,22 @@ contract Dividend2 {
         }
 
         totalDeposits -= amount;
+
+        console.log("user %s unstake %d, his deposit %d", msg.sender, amount, logs[logs.length-1].amount);
+        console.log("total deposti %d", totalDeposits);
     }
 
     function _settleCycle() internal {
         DividendInfo memory lastInfo = dividends[lastCycleNumber];
-        console.log("try check cycle, last %d, cur %d", lastInfo.startBlock, block.number);
         if (lastInfo.startBlock + minCycleBlock > block.number) {
-            console.log("in cur cycle, skip.");
             return;
         }
 
         lastCycleNumber += 1;
 
-        console.log("new cycle %d", lastCycleNumber);
+        console.log("enter cycle %d, total deposit %d", lastCycleNumber, totalDeposits);
         DividendInfo storage newInfo = dividends[lastCycleNumber];
         newInfo.startBlock = block.number;
-
-        console.log("new cycle total deposit %d", totalDeposits);
         newInfo.totalDeposits = totalDeposits;
 
         if (lastInfo.totalDeposits == 0) {
@@ -176,7 +184,6 @@ contract Dividend2 {
         } else {
             bool found = false;
             for (uint i = 0; i < dividends[cycleNumber].incomes.length; i++) {
-                console.log("get token %d", i);
                 if (dividends[cycleNumber].incomes[i].token == token) {
                     dividends[cycleNumber].incomes[i].amount += amount;
                     found = true;
@@ -191,16 +198,15 @@ contract Dividend2 {
         
     }
 
-    function withdraw(uint256[] calldata cycleNumbers) public {
+    function withdrawDevidends(uint256[] calldata cycleNumbers, address[] calldata tokens) public {
         for (uint i = 0; i < cycleNumbers.length; i++) {
-            console.log("%s withdraw %d", msg.sender, cycleNumbers[i]);
             uint256 cycleNumber = cycleNumbers[i];
             DividendInfo memory info = dividends[cycleNumber];
             require(info.totalDeposits > 0, "no dividend");
+            console.log("%s withdraw %d", msg.sender, cycleNumbers[i]);
             
             uint256 userStack = _getStack(msg.sender, cycleNumber);
-            console.log("get stack %d at cycle %d", userStack, cycleNumber);
-            console.log("get total stack %d at cycle %d", info.totalDeposits, cycleNumber);
+            console.log("get cycle %d stack %d/%d", cycleNumber, userStack, info.totalDeposits);
             require(userStack > 0, "cannot withdraw");
             for (uint256 i = 0; i < info.incomes.length; i++) {
                 uint256 amount = info.incomes[i].amount * userStack / info.totalDeposits;
