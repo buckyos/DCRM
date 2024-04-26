@@ -105,8 +105,17 @@ contract DividendContract is ReentrancyGuard {
         _depositToken(token, amount);
     }
 
-    function getStakedAmount(address user, uint256 cycleIndex) public view returns (uint256) {
+    function getStakeAmount(uint256 cycleIndex) public view returns (uint256) {
+        require(cycleIndex <= currentCycleIndex, "Invalid cycle index");
+
+        return _getStakeAmount(msg.sender, cycleIndex);
+    }
+
+    function _getStakeAmount(address user, uint256 cycleIndex) internal view returns (uint256) {
         StakeRecord[] memory stakeRecords = UserStakeRecords[user];
+        if (stakeRecords.length == 0) {
+            return 0;
+        }
 
         // print the stake records
         console.log("will print stake records for user %s", user);
@@ -115,9 +124,7 @@ contract DividendContract is ReentrancyGuard {
         }
 
         for (uint i = stakeRecords.length - 1; ; i--) {
-
-            // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，所以需要进入下一个周期才会生效，所以这里使用 < 而不是 <=
-            if (stakeRecords[i].cycleIndex < cycleIndex) {
+            if (stakeRecords[i].cycleIndex <= cycleIndex) {
                 return stakeRecords[i].amount;
             }
 
@@ -247,12 +254,23 @@ contract DividendContract is ReentrancyGuard {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
 
+        // display the params
+        console.log("will withdraw dividends user %s", msg.sender);
+        for (uint i = 0; i < cycleIndexs.length; i++) {
+            console.log("cycleIndexs %d", cycleIndexs[i]);
+        }
+
         RewardInfo[] memory rewards = new RewardInfo[](cycleIndexs.length*tokens.length);
         uint256 realRewardLength = 0;
 
         for (uint i = 0; i < cycleIndexs.length; i++) {
             uint256 cycleIndex = cycleIndexs[i];
-            require(cycleIndex < currentCycleIndex, "Cannot claim current cycle");
+            require(cycleIndex < currentCycleIndex, "Cannot claim current or future cycle");
+
+            // cycle 0 has no full cycle stake tokens
+            if (cycleIndex == 0) {
+                continue;
+            }
 
             // withdraw every token
             for (uint j = 0; j < tokens.length; j++) {
@@ -265,7 +283,9 @@ contract DividendContract is ReentrancyGuard {
                     continue;
                 }
 
-                uint256 userStaked = getStakedAmount(msg.sender, cycleIndex);
+                // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，
+                // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
+                uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
                 console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
 
                 // find the token reward of the cycle
