@@ -31,8 +31,9 @@ contract Exchange2 {
     // 周期的最小时长
     uint256 min_circle_time = 100;
 
-    uint256 total_mine_period = 420;
+    //uint256 total_mine_period = 420;
     uint256 adjust_period = 21;
+    uint256 initial_dmc_balance=768242.27 ether;
 
 
     constructor(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) {
@@ -44,9 +45,14 @@ contract Exchange2 {
         _newCycle();
     }
 
-    function getCircleBalance(uint256 circle_id) public view returns (uint256) {
-        uint256 totalDMC = DMC2(dmcToken).totalSupply();
-        return 210 ether;
+    function getCircleBalance(uint256 circle) public view returns (uint256) {
+        uint256 adjust_times = (circle-1) / adjust_period;
+        uint256 balance = initial_dmc_balance;
+        for (uint i = 0; i < adjust_times; i++) {
+            balance = balance * 4 / 5;
+        }
+        return balance;
+        //return 210 ether;
     }
 
     function _newCycle() internal {
