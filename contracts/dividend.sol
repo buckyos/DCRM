@@ -70,6 +70,16 @@ contract DividendContract is ReentrancyGuard {
         return cycles[currentCycleIndex];
     }
 
+    function getTotalStaked(uint256 cycleIndex) public view returns (uint256) {
+        if (cycleIndex == currentCycleIndex) {
+            return totalStaked;
+        } else if (cycleIndex < currentCycleIndex) {
+            return cycles[cycleIndex].totalStaked;
+        } else {
+            return 0;
+        }
+    }
+
     // deposit token to the current cycle
     function _depositToken(address token, uint256 amount) internal {
         require(amount > 0, "Cannot deposit 0");
@@ -118,10 +128,12 @@ contract DividendContract is ReentrancyGuard {
         }
 
         // print the stake records
+        /*
         console.log("will print stake records for user %s", user);
         for (uint i = 0; i < stakeRecords.length; i++) {
             console.log("StakeRecords: cycleIndex %d, stake mount %d", stakeRecords[i].cycleIndex, stakeRecords[i].amount);
         }
+        */
 
         for (uint i = stakeRecords.length - 1; ; i--) {
             if (stakeRecords[i].cycleIndex <= cycleIndex) {
@@ -165,6 +177,7 @@ contract DividendContract is ReentrancyGuard {
     // withdraw staking tokens from current first and then next cycles
     // withdraw amount must be less than or equal to the staked amount
     function unstake(uint256 amount) external nonReentrant {
+        require(amount > 0, "Cannot unstake 0");
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         require(stakeRecords.length > 0, "No stake record found");
         
@@ -172,13 +185,13 @@ contract DividendContract is ReentrancyGuard {
 
         // get the last stake record of the user
         StakeRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
-        require(lastStakeRecord.amount >= amount, "Insufficient staked amount");
+        require(lastStakeRecord.amount >= amount, "Insufficient stake amount");
 
         // 如果存在当前周期的质押操作，那么这个质押操作是可以直接撤销的不影响周期数据(当前质押要在下个周期进入cycleInfo中)
         // 如果不是当前周期的质押操作，或者当前周期的质押数量不足，那么这个质押操作是需要从上个周期关联的cycleInfo数据中减去的
-        console.log("unstaking amount %d", amount);
-        console.log("currentCycleIndex %d, lastStakeRecord.cycleIndex %d, amount %d", currentCycleIndex, lastStakeRecord.cycleIndex, lastStakeRecord.amount);
-        console.log("lastStakeRecord.cycleIndex %d", lastStakeRecord.cycleIndex);
+        // console.log("unstaking amount %d", amount);
+        // console.log("currentCycleIndex %d, lastStakeRecord.cycleIndex %d, amount %d", currentCycleIndex, lastStakeRecord.cycleIndex, lastStakeRecord.amount);
+        // console.log("lastStakeRecord.cycleIndex %d", lastStakeRecord.cycleIndex);
         if (lastStakeRecord.cycleIndex == currentCycleIndex) {
 
             uint256 newAmount = 0;
@@ -197,9 +210,9 @@ contract DividendContract is ReentrancyGuard {
                 uint256 diff = amount - newAmount;
 
                 StakeRecord storage prevStakeRecord = stakeRecords[stakeRecords.length - 2];
-                console.log("prevStakeRecord.amount %d", prevStakeRecord.amount);
-                console.log("prevStakeRecord.cycleIndex %d", prevStakeRecord.cycleIndex);
-                console.log("prevStakeRecord.totalStaked %d", cycles[prevStakeRecord.cycleIndex].totalStaked);
+                // console.log("prevStakeRecord.amount %d", prevStakeRecord.amount);
+                // console.log("prevStakeRecord.cycleIndex %d", prevStakeRecord.cycleIndex);
+                // console.log("prevStakeRecord.totalStaked %d", cycles[prevStakeRecord.cycleIndex].totalStaked);
                 
                 // the last record is unstaked all and is empty, delete it
                 stakeRecords.pop();
@@ -218,6 +231,7 @@ contract DividendContract is ReentrancyGuard {
         
         totalStaked -= amount;
 
+        console.log("will unstake transfer %s ===> %d", msg.sender, amount);
         require(IERC20(stakingToken).transfer(msg.sender, amount), "Unstake failed");
 
         emit Unstake(msg.sender, amount);
@@ -244,8 +258,8 @@ contract DividendContract is ReentrancyGuard {
     }
 
     // check if the user has settled the rewards for the cycle
-    function isDividendWithdrawed(address user, uint256 cycleIndex, address token) public view returns (bool) {
-        bytes32 key = keccak256(abi.encodePacked(user, cycleIndex, token));
+    function isDividendWithdrawed(uint256 cycleIndex, address token) public view returns (bool) {
+        bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
         return withdrawDividendState[key];
     }
 
@@ -253,6 +267,7 @@ contract DividendContract is ReentrancyGuard {
     function withdrawDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external nonReentrant {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
+        // require(UserStakeRecords[msg.sender].length > 0, "No stake record");
 
         // display the params
         console.log("will withdraw dividends user %s", msg.sender);
@@ -275,7 +290,8 @@ contract DividendContract is ReentrancyGuard {
             // withdraw every token
             for (uint j = 0; j < tokens.length; j++) {
                 address token = tokens[j];
-                require(!isDividendWithdrawed(msg.sender, cycleIndex, token), "Already claimed");
+                bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
+                require(!withdrawDividendState[key], "Already claimed");
 
                 CycleInfo storage cycle = cycles[cycleIndex];
 
@@ -287,6 +303,9 @@ contract DividendContract is ReentrancyGuard {
                 // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
                 uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
                 console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
+                if (userStaked == 0) {
+                    continue;
+                }
 
                 // find the token reward of the cycle
                 uint256 rewardAmount = 0;
@@ -305,7 +324,6 @@ contract DividendContract is ReentrancyGuard {
                 }
 
                 // set the withdraw state of the user and the cycle and the token
-                bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
                 withdrawDividendState[key] = true;
             }
         }
@@ -313,6 +331,7 @@ contract DividendContract is ReentrancyGuard {
         // do the transfer
         for (uint i = 0; i < realRewardLength; i++) {
             RewardInfo memory reward = rewards[i];
+            console.log("will withdraw transfer %s %s ===> %d", reward.token, msg.sender, reward.amount);
             if (reward.token == address(0)) {
                 payable(msg.sender).transfer(reward.amount);
             } else {
