@@ -1,11 +1,15 @@
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "hardhat/console.sol";
 
-contract DividendContract is ReentrancyGuard {
+contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, OwnableUpgradeable {
     address public stakingToken;
 
     // the max length of the cycle in blocks
@@ -45,7 +49,7 @@ contract DividendContract is ReentrancyGuard {
         uint256 cycleIndex;
         uint256 amount;
     }
-     mapping(address => StakeRecord[]) UserStakeRecords;
+    mapping(address => StakeRecord[]) UserStakeRecords;
 
     // the dividend state of the user
     mapping(bytes32 => bool) public withdrawDividendState;
@@ -55,8 +59,14 @@ contract DividendContract is ReentrancyGuard {
     event Unstake(address indexed user, uint256 amount);
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
 
+    function initialize(address _stakingToken, uint256 _cycleMaxLength) public initializer {
+        __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
+        __Ownable_init(msg.sender);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength);
+    }
 
-    constructor(address _stakingToken, uint256 _cycleMaxLength) {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
         cycleStartBlock = block.number;
@@ -339,4 +349,6 @@ contract DividendContract is ReentrancyGuard {
             }
         }
     }
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 }
