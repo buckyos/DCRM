@@ -4,6 +4,8 @@ import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from "chai";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
 
+// 此测试运行的前提：每轮的释放DMC固定为210，汇率固定为210
+
 describe("Exchange", function () {
     let dmc: DMC2
     let gwt: GWTToken2
@@ -17,17 +19,16 @@ describe("Exchange", function () {
 
         dmc = await (await ethers.deployContract("DMC2", [ethers.parseEther("1000000000"), [signers[0].address], [ethers.parseEther("1000")]])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWTToken2")).waitForDeployment()
-        exchange = await(await ethers.deployContract("Exchange2", [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000])).waitForDeployment()
-        console.log("exchange:", await exchange.getAddress())
-        /*
-        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
-            [await dmc.getAddress(), await gwt.getAddress()], 
+        //exchange = await(await ethers.deployContract("Exchange2", [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000])).waitForDeployment();
+        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange2"), 
+            [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000], 
             {
                 initializer: "initialize",
                 kind: "uups",
                 timeout: 0
-            })).waitForDeployment() as unknown as Exchange;
-        */
+            })).waitForDeployment() as unknown as Exchange2;
+        console.log("exchange:", await exchange.getAddress());
+        
         await (await gwt.enableMinter([await exchange.getAddress(), signers[0].address])).wait();
         await (await dmc.enableMinter([await exchange.getAddress()])).wait();
 
