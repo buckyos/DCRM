@@ -45,7 +45,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     event newCycle(uint256 cycle_number, uint256 dmc_balance, uint256 start_time);
     event gwtRateChanged(uint256 new_rate, uint256 old_rate);
-    event DMCMinted(uint256 amount, uint256 remain);
+    event DMCMinted(address user, uint256 amount, uint256 remain);
 
     function initialize(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public initializer {
         __UUPSUpgradeable_init();
@@ -151,7 +151,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             is_empty = true;
         }
 
-        emit DMCMinted(real_amount, remain_dmc_balance);
+        emit DMCMinted(msg.sender, real_amount, remain_dmc_balance);
 
         return (real_amount, is_empty);
     }
