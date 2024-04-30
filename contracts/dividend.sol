@@ -26,6 +26,12 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         uint256 amount;
     }
 
+    struct RewardWithdrawInfo {
+        address token;
+        uint256 amount;
+        bool withdrawed;
+    }
+
     struct CycleInfo {
         // The start block of the cycle
         uint256 startBlock;
@@ -58,6 +64,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     event Stake(address indexed user, uint256 amount);
     event Unstake(address indexed user, uint256 amount);
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
+    event Withdraw(address indexed user, address token, uint256 amount);
 
     function initialize(address _stakingToken, uint256 _cycleMaxLength) public initializer {
         __UUPSUpgradeable_init();
@@ -273,6 +280,70 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return withdrawDividendState[key];
     }
 
+    // estimate the rewards for the user
+    function estimateDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external view returns (RewardWithdrawInfo[] memory) {
+        require(cycleIndexs.length > 0, "No cycle index");
+        require(tokens.length > 0, "No token");
+
+        RewardWithdrawInfo[] memory rewards = new RewardWithdrawInfo[](cycleIndexs.length * tokens.length);
+        uint256 realRewardLength = 0;
+
+        for (uint i = 0; i < cycleIndexs.length; i++) {
+            uint256 cycleIndex = cycleIndexs[i];
+            require(cycleIndex < currentCycleIndex, "Cannot claim current or future cycle");
+
+            // cycle 0 has no full cycle stake tokens
+            if (cycleIndex == 0) {
+                // first cycle, no rewards
+                continue;
+            }
+
+            // withdraw every token
+            for (uint j = 0; j < tokens.length; j++) {
+                address token = tokens[j];
+                bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
+                bool withdrawed = withdrawDividendState[key];
+
+                CycleInfo storage cycle = cycles[cycleIndex];
+
+                if (cycle.totalStaked == 0) {
+                    continue;
+                }
+
+                // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，
+                // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
+                uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
+                // console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
+                if (userStaked == 0) {
+                    continue;
+                }
+
+                // find the token reward of the cycle
+                uint256 rewardAmount = 0;
+                for (uint k = 0; k < cycle.rewards.length; k++) {
+                    RewardInfo storage reward = cycle.rewards[k];
+                    if (reward.token == token) {
+                        console.log("reward.amount %d, userStaked %d, cycle.totalStaked %d", reward.amount, userStaked, cycle.totalStaked);
+                        rewardAmount = reward.amount * userStaked / cycle.totalStaked;
+                        break;
+                    }
+                }
+
+                if (rewardAmount > 0) {
+                    rewards[realRewardLength++] = RewardWithdrawInfo(token, rewardAmount, withdrawed);
+                }
+            }
+        }
+
+        // copy the real rewards to new array
+        RewardWithdrawInfo[] memory realRewards = new RewardWithdrawInfo[](realRewardLength);
+        for (uint i = 0; i < realRewardLength; i++) {
+            realRewards[i] = rewards[i];
+        }
+
+        return realRewards;
+    }
+
     // claim rewards for the cycle
     function withdrawDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external nonReentrant {
         require(cycleIndexs.length > 0, "No cycle index");
@@ -285,7 +356,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             console.log("cycleIndexs %d", cycleIndexs[i]);
         }
 
-        RewardInfo[] memory rewards = new RewardInfo[](cycleIndexs.length*tokens.length);
+        RewardInfo[] memory rewards = new RewardInfo[](cycleIndexs.length * tokens.length);
         uint256 realRewardLength = 0;
 
         for (uint i = 0; i < cycleIndexs.length; i++) {
@@ -347,6 +418,8 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             } else {
                 IERC20(reward.token).transfer(msg.sender, reward.amount);
             }
+
+            emit Withdraw(msg.sender, reward.token, reward.amount);
         }
     }
 
