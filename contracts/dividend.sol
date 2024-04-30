@@ -60,6 +60,9 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     // the dividend state of the user
     mapping(bytes32 => bool) public withdrawDividendState;
 
+    // all the deposit token balance of the contract
+    mapping(address => uint256) public tokenBalances;
+
     event Deposit(uint256 amount, address token);
     event Stake(address indexed user, uint256 amount);
     event Unstake(address indexed user, uint256 amount);
@@ -97,10 +100,19 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    function getDepositTokenBalance(address token) public view returns (uint256) {
+        return tokenBalances[token];
+    }
+
     // deposit token to the current cycle
     function _depositToken(address token, uint256 amount) internal {
         require(amount > 0, "Cannot deposit 0");
 
+        // first update the token balance
+        console.log("token balance growed: %s %d ===> %d", token, tokenBalances[token], tokenBalances[token] + amount);
+        tokenBalances[token] += amount;
+
+        // then update the current cycle reward
         RewardInfo[] storage rewards = cycles[currentCycleIndex].rewards;
         for (uint256 i = 0; i < rewards.length; i++) {
             if (rewards[i].token == token) {
@@ -114,7 +126,6 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         emit Deposit(amount, token);
     }
 
-    
     receive() external payable {
         tryNewCycle();
 
@@ -130,6 +141,23 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         IERC20(token).transferFrom(msg.sender, address(this), amount);
 
         _depositToken(token, amount);
+    }
+
+    function updateTokenBalance(address token) external nonReentrant {
+        uint256 balance;
+        if (token == address(0)) {
+            // If the token address is 0, return the ETH balance of the contract
+            balance = address(this).balance;
+        } else {
+            // If the token address is not 0, return the ERC20 token balance of the contract
+            balance = IERC20(token).balanceOf(address(this));
+        }
+
+        require(balance >= tokenBalances[token], "Invalid balance state");
+        if (balance > tokenBalances[token]) {
+            uint256 diff = balance - tokenBalances[token];
+            _depositToken(token, diff);
+        }
     }
 
     function getStakeAmount(uint256 cycleIndex) public view returns (uint256) {
@@ -418,6 +446,12 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             } else {
                 IERC20(reward.token).transfer(msg.sender, reward.amount);
             }
+
+            // then update the token balance
+            console.log("token balance reduced: %s %d ===> %d", reward.token, tokenBalances[reward.token], tokenBalances[reward.token] - reward.amount);
+            require(tokenBalances[reward.token] >= reward.amount, "Invalid balance state");
+           
+            tokenBalances[reward.token] -= reward.amount;
 
             emit Withdraw(msg.sender, reward.token, reward.amount);
         }
