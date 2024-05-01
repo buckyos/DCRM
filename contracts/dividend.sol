@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "hardhat/console.sol";
 
+
 contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, OwnableUpgradeable {
     address public stakingToken;
 
@@ -63,23 +64,35 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     // all the deposit token balance of the contract
     mapping(address => uint256) public tokenBalances;
 
+    // token white list
+    mapping(address => bool) private tokenWhiteList;
+    address[] private tokenWhiteListArray;
+
+
+    event TokenAddedToWhitelist(address token);
+    event TokenRemovedFromWhitelist(address token);
     event Deposit(uint256 amount, address token);
     event Stake(address indexed user, uint256 amount);
     event Unstake(address indexed user, uint256 amount);
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
     event Withdraw(address indexed user, address token, uint256 amount);
 
-    function initialize(address _stakingToken, uint256 _cycleMaxLength) public initializer {
+    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory tokenList) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
-        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, tokenList);
     }
 
-    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength) public onlyInitializing {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory tokenList) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
         cycleStartBlock = block.number;
+
+        for (uint i = 0; i < tokenList.length; i++) {
+            tokenWhiteList[tokenList[i]] = true;
+            tokenWhiteListArray.push(tokenList[i]);
+        }
     }
 
     function getCurrentCycleIndex() public view returns (uint256) {
@@ -88,6 +101,40 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     function getCurrentCycle() public view returns (CycleInfo memory) {
         return cycles[currentCycleIndex];
+    }
+
+
+    function addTokenToWhitelist(address token) public onlyOwner {
+        if (!tokenWhiteList[token]) {
+            tokenWhiteList[token] = true;
+            tokenWhiteListArray.push(token);
+
+            emit TokenAddedToWhitelist(token);
+        }
+    }
+
+    function removeTokenFromWhitelist(address token) public onlyOwner {
+        if (tokenWhiteList[token]) {
+            tokenWhiteList[token] = false;
+
+            for (uint i = 0; i < tokenWhiteListArray.length; i++) {
+                if (tokenWhiteListArray[i] == token) {
+                    tokenWhiteListArray[i] = tokenWhiteListArray[tokenWhiteListArray.length - 1];
+                    tokenWhiteListArray.pop();
+                    break;
+                }
+            }
+
+            emit TokenRemovedFromWhitelist(token);
+        }
+    }
+
+    function isTokenInWhitelisted(address token) public view returns (bool) {
+        return tokenWhiteList[token];
+    }
+
+    function getWhitelist() public view returns (address[] memory) {
+        return tokenWhiteListArray;
     }
 
     function getTotalStaked(uint256 cycleIndex) public view returns (uint256) {
@@ -107,6 +154,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     // deposit token to the current cycle
     function _depositToken(address token, uint256 amount) internal {
         require(amount > 0, "Cannot deposit 0");
+        require(tokenWhiteList[token], "Token not in whitelist");
 
         // first update the token balance
         console.log("token balance growed: %s %d ===> %d", token, tokenBalances[token], tokenBalances[token] + amount);
@@ -315,6 +363,11 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         RewardWithdrawInfo[] memory rewards = new RewardWithdrawInfo[](cycleIndexs.length * tokens.length);
         uint256 realRewardLength = 0;
+
+        // check token white list
+        for (uint i = 0; i < tokens.length; i++) {
+            require(tokenWhiteList[tokens[i]], "Token not in whitelist");
+        }
 
         for (uint i = 0; i < cycleIndexs.length; i++) {
             uint256 cycleIndex = cycleIndexs[i];
