@@ -29,17 +29,13 @@ describe("Devidend", function () {
     //dividend = await (await ethers.deployContract("Dividend2", [await dmc.getAddress(), 1000])).waitForDeployment()
     
     // add init token address as white list, address(0) and gwt token address
-    //await (await dividend.addTokenAddress(await gwt.getAddress())).wait();
-    //await (await dividend.addTokenAddress("0x"
     const tokenWhiteList = [await gwt.getAddress(), "0x0000000000000000000000000000000000000000"];
 
-    dividend = await (
-      await ethers.deployContract("DividendContract", [
-        await dmc.getAddress(),
-        1000,
-        tokenWhiteList,
-      ])
-    ).waitForDeployment();
+    dividend = await (await upgrades.deployProxy(await ethers.getContractFactory("DividendContract"), [
+      await dmc.getAddress(),
+      1000,
+      tokenWhiteList
+  ])).waitForDeployment() as unknown as DividendContract;
 
     // 给signers[0] 1000个GWT
     await (await gwt.enableMinter([signers[0].address])).wait();

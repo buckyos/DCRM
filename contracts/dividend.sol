@@ -77,21 +77,21 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
     event Withdraw(address indexed user, address token, uint256 amount);
 
-    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory tokenList) public initializer {
+    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
-        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, tokenList);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList);
     }
 
-    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory tokenList) public onlyInitializing {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
         cycleStartBlock = block.number;
 
-        for (uint i = 0; i < tokenList.length; i++) {
-            tokenWhiteList[tokenList[i]] = true;
-            tokenWhiteListArray.push(tokenList[i]);
+        for (uint i = 0; i < _tokenList.length; i++) {
+            tokenWhiteList[_tokenList[i]] = true;
+            tokenWhiteListArray.push(_tokenList[i]);
         }
     }
 
