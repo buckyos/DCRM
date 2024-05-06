@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract DMC2 is ERC20Burnable, Ownable {
-    uint256 unReleaseSupply;
     mapping (address => bool) allow_minter;
 
     modifier onlyMinter() {
@@ -13,15 +12,13 @@ contract DMC2 is ERC20Burnable, Ownable {
         _;
     }
 
-    constructor(uint256 _unReleaseSupply, address[] memory initAddress, uint[] memory initAmount) ERC20("Datamall Chain Token", "DMC") Ownable(msg.sender) {
-        
-        uint256 _totalSupply = _unReleaseSupply;
+    constructor(uint256 _totalSupply, address[] memory initAddress, uint[] memory initAmount) ERC20("Datamall Chain Token", "DMC") Ownable(msg.sender) {
+        uint256 totalInited = 0;
         for (uint i = 0; i < initAddress.length; i++) {
             _mint(initAddress[i], initAmount[i]);
-            _totalSupply -= initAmount[i];
+            totalInited += initAmount[i];
         }
-
-        unReleaseSupply = _totalSupply;
+        _mint(address(this), _totalSupply - totalInited);
     }
 
     function enableMinter(address[] calldata addresses) public onlyOwner {
@@ -37,8 +34,6 @@ contract DMC2 is ERC20Burnable, Ownable {
     }
 
     function mint(address to, uint256 amount) public onlyMinter {
-        require(unReleaseSupply >= amount, "max supply exceeded");
-        _mint(to, amount);
-        unReleaseSupply -= amount;
+        this.transfer(to, amount);
     }
 }
