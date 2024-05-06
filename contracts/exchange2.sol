@@ -40,9 +40,6 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint256 adjust_period;
     uint256 initial_dmc_balance;
 
-    // DMC1到2的兑换
-    mapping(bytes32 => uint256) public dmc1_to_dmc2;
-
     event newCycle(uint256 cycle_number, uint256 dmc_balance, uint256 start_time);
     event gwtRateChanged(uint256 new_rate, uint256 old_rate);
     event DMCMinted(address user, uint256 amount, uint256 remain);
@@ -108,8 +105,11 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 console.log("prev cycle dmc balance left %d, total left %d, total left cycle %d", remain_dmc_balance, total_addtion_dmc_balance, addtion_circle_count);
 
                 //本周期未挖完，降低dmc2gwt_rate
-                uint256 old_rate = dmc2gwt_rate;
                 dmc2gwt_rate = dmc2gwt_rate * (1-remain_dmc_balance/current_circle_dmc_balance);
+                if (dmc2gwt_rate < old_rate * 4 / 5) {
+                    // 跌幅限制为20%
+                    dmc2gwt_rate = old_rate * 4 / 5;
+                }
                 if(dmc2gwt_rate < 210) {
                     // 最低值为210
                     dmc2gwt_rate = 210;
@@ -121,10 +121,14 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 }
                 //本周期挖完了，提高dmc2gwt_rate
                 dmc2gwt_rate = dmc2gwt_rate * (1+(current_finish_time-current_mine_circle_start)/min_circle_time);
-                if(dmc2gwt_rate > 210) {
-                    // 为了测试，最高值也为210
-                    dmc2gwt_rate = 210;
+                if(dmc2gwt_rate > old_rate * 6 / 5) {
+                    // 涨幅限制为20%
+                    dmc2gwt_rate = old_rate * 6 / 5;
                 }
+                /*
+                    // for test
+                    dmc2gwt_rate = 210；
+                */
                 console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
@@ -154,24 +158,6 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         emit DMCMinted(msg.sender, real_amount, remain_dmc_balance);
 
         return (real_amount, is_empty);
-    }
-
-    function registerDMC1(address recvAddress, string calldata cookie, uint256 dmc1Amount) onlyOwner public {
-        dmc1_to_dmc2[keccak256(abi.encodePacked(recvAddress, cookie))] = dmc1Amount;
-    }
-
-    function claimDMC2(string calldata cookie) public {
-        bytes32 key = keccak256(abi.encodePacked(msg.sender, cookie));
-        require(dmc1_to_dmc2[key] > 0, "no dmc1 amount");
-        uint256 dmc2Amount = dmc1_to_dmc2[key] * 4 / 5;
-        (uint256 claimAmount, bool is_empty) = _decreaseDMCBalance(dmc2Amount);
-        if (is_empty) {
-            dmc1_to_dmc2[key] -= claimAmount * 5 / 4;
-        } else {
-            dmc1_to_dmc2[key] = 0;
-        }
-
-        DMC2(dmcToken).mint(msg.sender, claimAmount);
     }
 
     function DMCtoGWT(uint256 amount) public {
