@@ -133,7 +133,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return tokenWhiteList[token];
     }
 
-    function getWhitelist() public view returns (address[] memory) {
+    function getTokenWhitelist() public view returns (address[] memory) {
         return tokenWhiteListArray;
     }
 

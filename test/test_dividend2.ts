@@ -1,9 +1,5 @@
 import { ethers, upgrades } from "hardhat";
-import {
-    DMC2,
-    GWTToken2,
-    DividendContract,
-} from "../typechain-types";
+import { DMC2, GWTToken2, DividendContract } from "../typechain-types";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { assert, expect } from "chai";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
@@ -27,15 +23,19 @@ describe("Devidend", function () {
     ).waitForDeployment();
     gwt = await (await ethers.deployContract("GWTToken2")).waitForDeployment();
     //dividend = await (await ethers.deployContract("Dividend2", [await dmc.getAddress(), 1000])).waitForDeployment()
-    
-    // add init token address as white list, address(0) and gwt token address
-    const tokenWhiteList = [await gwt.getAddress(), "0x0000000000000000000000000000000000000000"];
 
-    dividend = await (await upgrades.deployProxy(await ethers.getContractFactory("DividendContract"), [
-      await dmc.getAddress(),
-      1000,
-      tokenWhiteList
-  ])).waitForDeployment() as unknown as DividendContract;
+    // add init token address as white list, address(0) and gwt token address
+    const tokenWhiteList = [
+      await gwt.getAddress(),
+      "0x0000000000000000000000000000000000000000",
+    ];
+
+    dividend = (await (
+      await upgrades.deployProxy(
+        await ethers.getContractFactory("DividendContract"),
+        [await dmc.getAddress(), 1000, tokenWhiteList]
+      )
+    ).waitForDeployment()) as unknown as DividendContract;
 
     // 给signers[0] 1000个GWT
     await (await gwt.enableMinter([signers[0].address])).wait();
@@ -49,6 +49,39 @@ describe("Devidend", function () {
         await dmc.connect(signers[i]).approve(await dividend.getAddress(), 1000)
       ).wait();
     }
+
+    // 测试白名单
+    await (await dividend.addTokenToWhitelist(await gwt.getAddress())).wait();
+  });
+
+  it("test init", async () => {
+    // test white list, only owner can add token to white list
+    dividend.connect(signers[0]).addTokenToWhitelist(await gwt.getAddress());
+
+    // test not owner
+    await expect(
+      dividend.connect(signers[1]).addTokenToWhitelist(await gwt.getAddress())
+    ).to.be.reverted;
+
+    // test remove token from white list
+    await (
+      await dividend.removeTokenFromWhitelist(await gwt.getAddress())
+    ).wait();
+
+    // test is in white list
+    expect(
+      await dividend.isTokenInWhitelisted(await gwt.getAddress())
+    ).to.equal(false);
+
+    // add again
+    await (await dividend.addTokenToWhitelist(await gwt.getAddress())).wait();
+    expect(
+      await dividend.isTokenInWhitelisted(await gwt.getAddress())
+    ).to.equal(true);
+
+    // display the white list
+    const whiteList = await dividend.getTokenWhitelist();
+    console.log("white list: ", whiteList);
   });
 
   it("test cycle 0", async () => {
@@ -297,12 +330,16 @@ describe("Devidend", function () {
     // record the token balance of the contract
     let balance_prev;
     {
-        balance_prev = BigInt(await dividend.getDepositTokenBalance(gwt.getAddress()));
-        console.log("balance_prev: ", balance_prev);
-        
-        // try update once
-        await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
-        expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(balance_prev);
+      balance_prev = BigInt(
+        await dividend.getDepositTokenBalance(gwt.getAddress())
+      );
+      console.log("balance_prev: ", balance_prev);
+
+      // try update once
+      await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+      expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+        balance_prev
+      );
     }
 
     // test withdraw dividends with cycle 2 for signer[1]
@@ -325,11 +362,14 @@ describe("Devidend", function () {
 
     // verify the token balance of the contract after withdraw
     {
-        expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(balance_prev - 82n);
-        await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
-        expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(balance_prev - 82n);
+      expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+        balance_prev - 82n
+      );
+      await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+      expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+        balance_prev - 82n
+      );
     }
-
 
     // test withdraw second time with cycle 2 for signer[1], will be reverted
     await expect(
@@ -417,12 +457,189 @@ describe("Devidend", function () {
     // cycle 2 withdraw 82, and cycle 3 withdraw 47, total 129
     expect(await gwt.balanceOf(signers[1].address)).to.equal(129);
 
-    // signers2提取两个周期的分红，应该能提到117+52=169 GWT
+    // signer2提取两个周期的分红，应该能提到117+52=169 GWT
     await (
       await dividend
         .connect(signers[2])
         .withdrawDividends([2, 3], [await gwt.getAddress()])
     ).wait();
     expect(await gwt.balanceOf(signers[2].address)).to.equal(169);
+  });
+
+  it("test cycle N", async () => {
+    const totalDeposit = await dividend.getDepositTokenBalance(
+      gwt.getAddress()
+    );
+    const currentCycle = await dividend.getCurrentCycleIndex();
+    console.log(
+      "total deposit: ",
+      totalDeposit,
+      " current cycle: ",
+      currentCycle
+    );
+
+    const stake1 = await dividend
+      .connect(signers[1])
+      .getStakeAmount(currentCycle);
+
+    // deposit 1 GWT for 5 cycles
+    for (let i = 0; i < 5; i++) {
+      mine(1000);
+      await (await dividend.deposit(1, await gwt.getAddress())).wait();
+
+      // check stake amount with signer[1]
+      const currentCycle = await dividend.getCurrentCycleIndex();
+      expect(
+        await dividend.connect(signers[1]).getStakeAmount(currentCycle)
+      ).to.equal(stake1);
+      expect(
+        await dividend.connect(signers[1]).getStakeAmount(currentCycle - 1n)
+      ).to.equal(stake1);
+    }
+
+    // check the total deposit amount
+    expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+      totalDeposit + 5n
+    );
+
+    // get current cycle index
+    const cycle = await dividend.getCurrentCycleIndex();
+    expect(cycle).to.equal(currentCycle + 5n);
+
+    // get current cycle staked amount for signer[1]
+    const stake1_now = await dividend.connect(signers[1]).getStakeAmount(cycle);
+    console.log("stake1: ", stake1_now);
+
+    // try unstake extend the limit
+    await expect(
+      dividend.connect(signers[1]).unstake(stake1_now + 1n)
+    ).to.be.revertedWith("Insufficient stake amount");
+
+    // record the token balance of signer[1] of DMC
+    const balance1 = await dmc.balanceOf(signers[1].address);
+    console.log("DMC balance1 of signer[1]: ", balance1);
+
+    // try unstake all
+    await (await dividend.connect(signers[1]).unstake(stake1_now)).wait();
+
+    // check balance is right
+    const balance2 = await dmc.balanceOf(signers[1].address);
+    console.log("DMC balance2 of signer[1]: ", balance2);
+    expect(balance2).to.equal(balance1 + stake1_now);
+
+    {
+      // try withdraw dividends for prev cycle with signer[1], but is zero
+      const balance = await gwt.balanceOf(signers[1].address);
+      await (
+        await dividend
+          .connect(signers[1])
+          .withdrawDividends([cycle - 1n], [await gwt.getAddress()])
+      ).wait();
+      expect(await gwt.balanceOf(signers[1].address)).to.equal(balance);
+    }
+
+    // stake again with same amount
+    await (await dividend.connect(signers[1]).stake(stake1_now)).wait();
+
+    // check balance of gwt in contract for signer[1]
+    const balance3 = await dmc.balanceOf(signers[1].address);
+    console.log("DMC balance of signer[1]: ", balance3);
+    expect(balance3).to.equal(balance1);
+
+    {
+      // to next cycle
+      mine(1000);
+
+      // deposit 10 GWT to current cycle
+      await (await dividend.deposit(10, await gwt.getAddress())).wait();
+
+      expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+        totalDeposit + 5n + 10n
+      );
+
+      // try withdraw dividends for prev cycle with signer[1]
+      const balance = await gwt.balanceOf(signers[1].address);
+      await (
+        await dividend
+          .connect(signers[1])
+          .withdrawDividends([cycle], [await gwt.getAddress()])
+      ).wait();
+      expect(await gwt.balanceOf(signers[1].address)).to.equal(balance);
+    }
+
+    {
+      // to next cycle
+      mine(1000);
+
+      // deposit 10 GWT to current cycle
+      await (await dividend.deposit(10, await gwt.getAddress())).wait();
+
+      expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+        totalDeposit + 5n + 10n + 10n
+      );
+
+      // check stake amount for signer[1] with previous cycle
+      const cycle = await dividend.getCurrentCycleIndex();
+      const stake1 = await dividend
+        .connect(signers[1])
+        .getStakeAmount(cycle - 1n);
+
+      // get stake amount for signer[2] with prev cycle
+      const stake2 = await dividend
+        .connect(signers[2])
+        .getStakeAmount(cycle - 1n);
+
+      // estimate the dividend amount for signer[1] and signer[2]
+      const dividend1 = (10n * stake1) / (stake1 + stake2);
+      const dividend2 = (10n * stake2) / (stake1 + stake2);
+
+      // try withdraw dividends for prev cycle with signer[1]
+
+      // first check dividend is not withdrawed
+      expect(
+        await dividend
+          .connect(signers[1])
+          .isDividendWithdrawed(cycle - 1n, await gwt.getAddress())
+      ).to.equal(false);
+
+      const balance = await gwt.balanceOf(signers[1].address);
+      await (
+        await dividend
+          .connect(signers[1])
+          .withdrawDividends([cycle - 1n], [await gwt.getAddress()])
+      ).wait();
+      expect(await gwt.balanceOf(signers[1].address)).to.equal(
+        balance + dividend1
+      );
+
+      expect(
+        await dividend
+          .connect(signers[1])
+          .isDividendWithdrawed(cycle - 1n, await gwt.getAddress())
+      ).to.equal(true);
+
+      // try withdraw dividends for prev cycle with signer[2]
+      expect(
+        await dividend
+          .connect(signers[2])
+          .isDividendWithdrawed(cycle - 1n, await gwt.getAddress())
+      ).to.equal(false);
+
+      const balance2 = await gwt.balanceOf(signers[2].address);
+      await (
+        await dividend
+          .connect(signers[2])
+          .withdrawDividends([cycle - 1n], [await gwt.getAddress()])
+      ).wait();
+      expect(await gwt.balanceOf(signers[2].address)).to.equal(
+        balance2 + dividend2
+      );
+
+      expect(
+        await dividend
+          .connect(signers[2])
+          .isDividendWithdrawed(cycle - 1n, await gwt.getAddress())
+      ).to.equal(true);
+    }
   });
 });
