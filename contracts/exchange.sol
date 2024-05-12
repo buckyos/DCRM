@@ -107,7 +107,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         
         current_circle_dmc_balance = remain_dmc_balance;
         emit newCycle(current_circle, current_circle_dmc_balance, current_mine_circle_start);
-        console.log("new cycle %d start at %d, dmc balance %d", current_circle, current_mine_circle_start, current_circle_dmc_balance);
+        // console.log("new cycle %d start at %d, dmc balance %d", current_circle, current_mine_circle_start, current_circle_dmc_balance);
     }
 
     function adjustExchangeRate() internal {
@@ -118,7 +118,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 total_addtion_dmc_balance += remain_dmc_balance;
                 addtion_circle_count += 1;
 
-                console.log("prev cycle dmc balance left %d, total left %d, total left cycle %d", remain_dmc_balance, total_addtion_dmc_balance, addtion_circle_count);
+                // console.log("prev cycle dmc balance left %d, total left %d, total left cycle %d", remain_dmc_balance, total_addtion_dmc_balance, addtion_circle_count);
 
                 //本周期未挖完，降低dmc2gwt_rate
                 dmc2gwt_rate = dmc2gwt_rate * (1-remain_dmc_balance/current_circle_dmc_balance);
@@ -130,7 +130,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                     // 最低值为210
                     dmc2gwt_rate = 210;
                 }
-                console.log("decrease dmc2gwt_rate to %d", dmc2gwt_rate);
+                // console.log("decrease dmc2gwt_rate to %d", dmc2gwt_rate);
             } else {
                 if (addtion_circle_count > 0) {
                     addtion_circle_count -= 1;
@@ -143,14 +143,14 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 }
                 // for test
                 //dmc2gwt_rate = 210;
-                console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
+                // console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
             emit gwtRateChanged(dmc2gwt_rate, old_rate);
 
             _newCycle();
         } else {
-            console.log("keep cycle.");
+            // console.log("keep cycle.");
             require(remain_dmc_balance > 0, "no dmc balance in current circle");
         }
     }
@@ -222,7 +222,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     function GWTtoDMC(uint256 amount) public testDisabled {
         adjustExchangeRate();
         uint256 dmc_count = amount / dmc2gwt_rate;
-        console.log("exchange dmc %d from amount %d, rate %d", dmc_count, amount, dmc2gwt_rate);
+        // console.log("exchange dmc %d from amount %d, rate %d", dmc_count, amount, dmc2gwt_rate);
 
         (uint256 real_dmc_amount, bool is_empty) = _decreaseDMCBalance(dmc_count);
         require(real_dmc_amount > 0, "no dmc balance in current circle");
