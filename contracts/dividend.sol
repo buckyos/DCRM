@@ -157,7 +157,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         require(tokenWhiteList[token], "Token not in whitelist");
 
         // first update the token balance
-        console.log("token balance growed: %s %d ===> %d", token, tokenBalances[token], tokenBalances[token] + amount);
+        // console.log("token balance growed: %s %d ===> %d", token, tokenBalances[token], tokenBalances[token] + amount);
         tokenBalances[token] += amount;
 
         // then update the current cycle reward
@@ -246,7 +246,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         require(amount >0, "Cannot stake 0 DMC");
         require(IERC20(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
 
-        console.log("user stake ===> amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
+        // console.log("user stake ===> amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
 
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         if (stakeRecords.length == 0) {
@@ -275,7 +275,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         require(stakeRecords.length > 0, "No stake record found");
         
-        console.log("user unstake <=== amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
+        // console.log("user unstake <=== amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
 
         // get the last stake record of the user
         StakeRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
@@ -325,7 +325,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         
         totalStaked -= amount;
 
-        console.log("will unstake transfer %s ===> %d", msg.sender, amount);
+        // console.log("will unstake transfer %s ===> %d", msg.sender, amount);
         require(IERC20(stakingToken).transfer(msg.sender, amount), "Unstake failed");
 
         emit Unstake(msg.sender, amount);
@@ -338,7 +338,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         CycleInfo storage currentCycle = cycles[currentCycleIndex];
         if (currentBlock - currentCycle.startBlock >= cycleMaxLength) {
             currentCycleIndex = currentCycleIndex + 1;
-            console.log("enter new cycle %d, totalStaked %d", currentCycleIndex, totalStaked);
+            // console.log("enter new cycle %d, totalStaked %d", currentCycleIndex, totalStaked);
             CycleInfo storage newCycle = cycles[currentCycleIndex];
             newCycle.startBlock = currentBlock;
             newCycle.totalStaked = totalStaked;
@@ -405,7 +405,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                 for (uint k = 0; k < cycle.rewards.length; k++) {
                     RewardInfo storage reward = cycle.rewards[k];
                     if (reward.token == token) {
-                        console.log("reward.amount %d, userStaked %d, cycle.totalStaked %d", reward.amount, userStaked, cycle.totalStaked);
+                        // console.log("reward.amount %d, userStaked %d, cycle.totalStaked %d", reward.amount, userStaked, cycle.totalStaked);
                         rewardAmount = reward.amount * userStaked / cycle.totalStaked;
                         break;
                     }
@@ -433,10 +433,12 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         // require(UserStakeRecords[msg.sender].length > 0, "No stake record");
 
         // display the params
+        /*
         console.log("will withdraw dividends user %s", msg.sender);
         for (uint i = 0; i < cycleIndexs.length; i++) {
             console.log("cycleIndexs %d", cycleIndexs[i]);
         }
+        */
 
         RewardInfo[] memory rewards = new RewardInfo[](cycleIndexs.length * tokens.length);
         uint256 realRewardLength = 0;
@@ -465,7 +467,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                 // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，
                 // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
                 uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
-                console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
+                // console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
                 if (userStaked == 0) {
                     continue;
                 }
@@ -475,7 +477,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                 for (uint k = 0; k < cycle.rewards.length; k++) {
                     RewardInfo storage reward = cycle.rewards[k];
                     if (reward.token == token) {
-                        console.log("reward.amount %d, userStaked %d, cycle.totalStaked %d", reward.amount, userStaked, cycle.totalStaked);
+                        // console.log("reward.amount %d, userStaked %d, cycle.totalStaked %d", reward.amount, userStaked, cycle.totalStaked);
                         rewardAmount = reward.amount * userStaked / cycle.totalStaked;
                         break;
                     }
@@ -494,7 +496,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         // do the transfer
         for (uint i = 0; i < realRewardLength; i++) {
             RewardInfo memory reward = rewards[i];
-            console.log("will withdraw transfer %s %s ===> %d", reward.token, msg.sender, reward.amount);
+            // console.log("will withdraw transfer %s %s ===> %d", reward.token, msg.sender, reward.amount);
             if (reward.token == address(0)) {
                 payable(msg.sender).transfer(reward.amount);
             } else {
@@ -502,7 +504,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             }
 
             // then update the token balance
-            console.log("token balance reduced: %s %d ===> %d", reward.token, tokenBalances[reward.token], tokenBalances[reward.token] - reward.amount);
+            // console.log("token balance reduced: %s %d ===> %d", reward.token, tokenBalances[reward.token], tokenBalances[reward.token] - reward.amount);
             require(tokenBalances[reward.token] >= reward.amount, "Invalid balance state");
            
             tokenBalances[reward.token] -= reward.amount;
