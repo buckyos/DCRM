@@ -243,7 +243,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     // stake tokens to next cycle
     function stake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Cannot stake 0");
+        require(amount >0, "Cannot stake 0 DMC");
         require(IERC20(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
 
         console.log("user stake ===> amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
@@ -262,6 +262,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         // update the total staked amount of the contract
         totalStaked += amount;
+        //TODO: update current cycle's total staked?
 
         // emit the stake event
         emit Stake(msg.sender, amount);

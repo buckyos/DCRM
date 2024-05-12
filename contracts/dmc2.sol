@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract DMC2 is ERC20Burnable, Ownable {
     mapping (address => bool) allow_minter;
+    bool can_change_minter = true;
 
     modifier onlyMinter() {
         require(allow_minter[msg.sender], "mint not allowed");
@@ -20,14 +21,20 @@ contract DMC2 is ERC20Burnable, Ownable {
         }
         _mint(address(this), _totalSupply - totalInited);
     }
+    
+    function disableMinterChange() public onlyOwner {
+        can_change_minter = false;
+    }
 
     function enableMinter(address[] calldata addresses) public onlyOwner {
+        require(can_change_minter, "mint change not allowed");
         for (uint i = 0; i < addresses.length; i++) {
             allow_minter[addresses[i]] = true;
         }
     }
 
     function disableMinter(address[] calldata addresses) public onlyOwner {
+        require(can_change_minter, "mint change not allowed");
         for (uint i = 0; i < addresses.length; i++) {
             allow_minter[addresses[i]] = false;
         }

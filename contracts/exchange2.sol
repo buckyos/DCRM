@@ -15,6 +15,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     address gwtToken;
     address fundationIncome;
 
+    bool enable_dmc_mint = false;
     // 当前周期，也可以看做周期总数
     uint256 current_circle;
     uint256 current_mine_circle_start;
@@ -40,6 +41,8 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint256 adjust_period;
     uint256 initial_dmc_balance;
 
+    mapping(address=>bool) is_free_minted;
+
     event newCycle(uint256 cycle_number, uint256 dmc_balance, uint256 start_time);
     event gwtRateChanged(uint256 new_rate, uint256 old_rate);
     event DMCMinted(address user, uint256 amount, uint256 remain);
@@ -48,6 +51,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
         __Exchange2Upgradable_init(_dmcToken, _gwtToken, _fundationIncome, _min_circle_time);
+        free_mint_balance = 210*5000*10**18;
     }
 
     function __Exchange2Upgradable_init(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public onlyInitializing {
@@ -155,22 +159,58 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             is_empty = true;
         }
 
-        emit DMCMinted(msg.sender, real_amount, remain_dmc_balance);
-
         return (real_amount, is_empty);
     }
+
+    function addFreeMintBalance(uint256 amount) public onlyOwner {
+        require(amount > 0, "amount must be greater than 0");
+        GWTToken2(gwtToken).transferFrom(msg.sender, address(this), amount);
+    }
+
+    function freeMintGWT()  public {
+        //每个地址只能free mint一次
+        //每次成功得到210个GWT
+        require(free_mint_balance > 0, "no free mint balance");
+        require(!is_free_minted[msg.sender], "already free minted");
+        
+        GWTToken2(gwtToken).transferFrom(this, msg.sender, 210*10**18);
+        is_free_minted[msg.sender] = true;
+    }   
 
     function DMCtoGWT(uint256 amount) public {
         DMC2(dmcToken).burnFrom(msg.sender, amount);
         GWTToken2(gwtToken).mint(msg.sender, amount * dmc2gwt_rate * 6 / 5);
     }
 
+    function eanbleDMCMint() public onlyOwner {
+        enable_dmc_mint = true;
+    }
+
+    function addFreeDMCTestMintBalance(uint256 amount) public onlyOwner {
+        require(!enable_dmc_mint, "dmc mint is enabled,test end");
+        require(amount > 0, "amount must be greater than 0");
+        DMC2(dmcToken).transferFrom(msg.sender, address(this), amount);
+    }
+
+    function GWTToDMCForTest(uint256 ammount) public {
+        require(!enable_dmc_mint, "dmc mint is enabled,test end");
+        require(ammount > 0, "ammount must be greater than 0");
+        require(ammount % 210 == 0, "ammount must be multiple of 210");
+
+        dmc_ammount = ammount / 210;
+        DMC2(dmcToken).transferFrom(this, msg.sender, dmc_ammount);
+    }
+
     function GWTtoDMC(uint256 amount) public {
+        require(enable_dmc_mint, "dmc mint not enabled");
+
         adjustExchangeRate();
         uint256 dmc_count = amount / dmc2gwt_rate;
         console.log("exchange dmc %d from amount %d, rate %d", dmc_count, amount, dmc2gwt_rate);
 
         (uint256 real_dmc_amount, bool is_empty) = _decreaseDMCBalance(dmc_count);
+        require(real_dmc_amount > 0, "no dmc balance in current circle");
+        
         uint256 real_gwt_amount = amount;
         if (is_empty) {
             //current_finish_time = block.timestamp;
@@ -180,6 +220,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         //不用立刻转给分红合约，而是等积累一下
         GWTToken2(gwtToken).transferFrom(msg.sender, address(this), real_gwt_amount);
         DMC2(dmcToken).mint(msg.sender, real_dmc_amount);
+        emit DMCMinted(msg.sender, real_dmc_amount, remain_dmc_balance);
     }
     
     // 手工将累积的收入打给分红合约
