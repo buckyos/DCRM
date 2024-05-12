@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./dmc2.sol";
-import "./gwt2.sol";
+import "./dmc.sol";
+import "./gwt.sol";
 import "./dividend.sol";
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -10,12 +10,12 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
-contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     address dmcToken;
     address gwtToken;
     address fundationIncome;
 
-    bool enable_dmc_mint = false;
+    bool test_mode;
     // 当前周期，也可以看做周期总数
     uint256 current_circle;
     uint256 current_mine_circle_start;
@@ -41,17 +41,27 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint256 adjust_period;
     uint256 initial_dmc_balance;
 
+    uint256 free_mint_balance;
     mapping(address=>bool) is_free_minted;
 
     event newCycle(uint256 cycle_number, uint256 dmc_balance, uint256 start_time);
     event gwtRateChanged(uint256 new_rate, uint256 old_rate);
     event DMCMinted(address user, uint256 amount, uint256 remain);
 
+    modifier testEnabled() {
+        require(test_mode, "contract not in test mode");
+        _;
+    }
+
+    modifier testDisabled() {
+        require(!test_mode, "contract in test mode");
+        _;
+    }
+
     function initialize(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public initializer {
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
         __Exchange2Upgradable_init(_dmcToken, _gwtToken, _fundationIncome, _min_circle_time);
-        free_mint_balance = 210*5000*10**18;
     }
 
     function __Exchange2Upgradable_init(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public onlyInitializing {
@@ -65,18 +75,20 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         adjust_period = 21;
         initial_dmc_balance = 768242.27 ether;
 
+        test_mode = true;
+
         _newCycle();
     }
 
     function getCircleBalance(uint256 circle) public view returns (uint256) {
-        
+        //return 210 ether;
+
         uint256 adjust_times = (circle-1) / adjust_period;
         uint256 balance = initial_dmc_balance;
         for (uint i = 0; i < adjust_times; i++) {
             balance = balance * 4 / 5;
         }
         return balance;
-        //return 210 ether;
     }
 
     function _newCycle() internal {
@@ -95,7 +107,7 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         
         current_circle_dmc_balance = remain_dmc_balance;
         emit newCycle(current_circle, current_circle_dmc_balance, current_mine_circle_start);
-        //console.log("new cycle %d start at %d, dmc balance %d", current_circle, current_mine_circle_start, current_circle_dmc_balance);
+        console.log("new cycle %d start at %d, dmc balance %d", current_circle, current_mine_circle_start, current_circle_dmc_balance);
     }
 
     function adjustExchangeRate() internal {
@@ -129,10 +141,8 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                     // 涨幅限制为20%
                     dmc2gwt_rate = old_rate * 6 / 5;
                 }
-                /*
-                    // for test
-                    dmc2gwt_rate = 210；
-                */
+                // for test
+                //dmc2gwt_rate = 210;
                 console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
@@ -162,48 +172,54 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         return (real_amount, is_empty);
     }
 
-    function addFreeMintBalance(uint256 amount) public onlyOwner {
+    function addFreeMintBalance(uint256 amount) public {
         require(amount > 0, "amount must be greater than 0");
-        GWTToken2(gwtToken).transferFrom(msg.sender, address(this), amount);
+        free_mint_balance += amount;
+        GWT(gwtToken).transferFrom(msg.sender, address(this), amount);
     }
 
-    function freeMintGWT()  public {
+    function freeMintGWT() public {
         //每个地址只能free mint一次
         //每次成功得到210个GWT
-        require(free_mint_balance > 0, "no free mint balance");
         require(!is_free_minted[msg.sender], "already free minted");
+        require(free_mint_balance > 0, "no free mint balance");
         
-        GWTToken2(gwtToken).transferFrom(this, msg.sender, 210*10**18);
         is_free_minted[msg.sender] = true;
+        free_mint_balance -= 210 ether;
+        GWT(gwtToken).mint(msg.sender, 210 ether);
     }   
 
     function DMCtoGWT(uint256 amount) public {
-        DMC2(dmcToken).burnFrom(msg.sender, amount);
-        GWTToken2(gwtToken).mint(msg.sender, amount * dmc2gwt_rate * 6 / 5);
+        DMC(dmcToken).burnFrom(msg.sender, amount);
+        GWT(gwtToken).mint(msg.sender, amount * dmc2gwt_rate * 6 / 5);
     }
 
-    function eanbleDMCMint() public onlyOwner {
-        enable_dmc_mint = true;
+    function enableTestMode() public onlyOwner testDisabled {
+        test_mode = true;
     }
 
-    function addFreeDMCTestMintBalance(uint256 amount) public onlyOwner {
-        require(!enable_dmc_mint, "dmc mint is enabled,test end");
+    function enableProdMode() public onlyOwner testEnabled {
+        test_mode = false;
+
+        // 将剩余的DMC还给owner
+        DMC(dmcToken).transfer(msg.sender, DMC(dmcToken).balanceOf(address(this)));
+    }
+
+    function addFreeDMCTestMintBalance(uint256 amount) public onlyOwner testEnabled {
         require(amount > 0, "amount must be greater than 0");
-        DMC2(dmcToken).transferFrom(msg.sender, address(this), amount);
+
+        DMC(dmcToken).transferFrom(msg.sender, address(this), amount);
     }
 
-    function GWTToDMCForTest(uint256 ammount) public {
-        require(!enable_dmc_mint, "dmc mint is enabled,test end");
-        require(ammount > 0, "ammount must be greater than 0");
-        require(ammount % 210 == 0, "ammount must be multiple of 210");
+    function GWTToDMCForTest(uint256 amount) public testEnabled {
+        require(amount > 0, "ammount must be greater than 0");
+        require(amount % 210 == 0, "ammount must be multiple of 210");
 
-        dmc_ammount = ammount / 210;
-        DMC2(dmcToken).transferFrom(this, msg.sender, dmc_ammount);
+        GWT(gwtToken).transferFrom(msg.sender, address(this), amount);
+        DMC(dmcToken).transfer(msg.sender, amount / 210);
     }
 
-    function GWTtoDMC(uint256 amount) public {
-        require(enable_dmc_mint, "dmc mint not enabled");
-
+    function GWTtoDMC(uint256 amount) public testDisabled {
         adjustExchangeRate();
         uint256 dmc_count = amount / dmc2gwt_rate;
         console.log("exchange dmc %d from amount %d, rate %d", dmc_count, amount, dmc2gwt_rate);
@@ -218,15 +234,15 @@ contract Exchange2 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         }
 
         //不用立刻转给分红合约，而是等积累一下
-        GWTToken2(gwtToken).transferFrom(msg.sender, address(this), real_gwt_amount);
-        DMC2(dmcToken).mint(msg.sender, real_dmc_amount);
+        GWT(gwtToken).transferFrom(msg.sender, address(this), real_gwt_amount);
+        DMC(dmcToken).mint(msg.sender, real_dmc_amount);
         emit DMCMinted(msg.sender, real_dmc_amount, remain_dmc_balance);
     }
     
     // 手工将累积的收入打给分红合约
     function transferIncome() public {
-        GWTToken2(gwtToken).approve(fundationIncome, GWTToken2(gwtToken).balanceOf(address(this)));
-        DividendContract(payable(fundationIncome)).deposit(GWTToken2(gwtToken).balanceOf(address(this)), address(gwtToken));
+        GWT(gwtToken).approve(fundationIncome, GWT(gwtToken).balanceOf(address(this)));
+        DividendContract(payable(fundationIncome)).deposit(GWT(gwtToken).balanceOf(address(this)), address(gwtToken));
     }
 
     function getCycleInfo() public view returns (uint256, uint256, uint256) {

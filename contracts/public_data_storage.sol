@@ -65,7 +65,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         uint256 lastShowBlock;
     }
 
-    GWTToken public gwtToken;// Gb per Week Token
+    GWT public gwtToken;// Gb per Week Token
     address public foundationAddress;
 
     mapping(address => SupplierInfo) _supplierInfos;
@@ -137,7 +137,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
 
-        gwtToken = GWTToken(_gwtToken);
+        gwtToken = GWT(_gwtToken);
         _startBlock = block.number;
         _currectCycle = 0;
         foundationAddress = _Foundation;

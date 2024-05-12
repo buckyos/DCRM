@@ -8,7 +8,7 @@ import "hardhat/console.sol";
 
 
 contract StorageExchange {
-    GWTToken public gwtToken;// Gb per Week Token
+    GWT public gwtToken;// Gb per Week Token
 
     struct StorageSupplier {
         address ceo;//可以修改其它职位，拥有最高权限。其私钥很少使用。
@@ -110,7 +110,7 @@ contract StorageExchange {
     
 
     constructor(address _gwtTokenAddress) {
-        gwtToken = GWTToken(_gwtTokenAddress);
+        gwtToken = GWT(_gwtTokenAddress);
         nextOrderId = 0;
         //sysFixPeriodPerWeek = (10**18 / 128) / sysPeriodPerWeek;
         // 之前这里除以128是为了处理price的128倍数，移到正确的_calcTotalPrice函数中处理

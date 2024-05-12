@@ -1,5 +1,5 @@
 import { ethers, upgrades } from "hardhat"
-import { DMC2, Exchange2, GWTToken2 } from "../typechain-types"
+import { DMC, Exchange, GWT } from "../typechain-types"
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from "chai";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
@@ -7,9 +7,9 @@ import { mine } from "@nomicfoundation/hardhat-network-helpers";
 // 此测试运行的前提：每轮的释放DMC固定为210，汇率固定为210
 
 describe("Exchange", function () {
-    let dmc: DMC2
-    let gwt: GWTToken2
-    let exchange: Exchange2
+    let dmc: DMC
+    let gwt: GWT
+    let exchange: Exchange
     let signers: HardhatEthersSigner[];
 
     before(async () => {
@@ -17,16 +17,16 @@ describe("Exchange", function () {
 
         console.log("signers 0:", signers[0].address)
 
-        dmc = await (await ethers.deployContract("DMC2", [ethers.parseEther("1000000000"), [signers[0].address], [ethers.parseEther("1000")]])).waitForDeployment()
-        gwt = await (await ethers.deployContract("GWTToken2")).waitForDeployment()
+        dmc = await (await ethers.deployContract("DMC", [ethers.parseEther("1000000000"), [signers[0].address], [ethers.parseEther("100000")]])).waitForDeployment()
+        gwt = await (await ethers.deployContract("GWT", [[], []])).waitForDeployment()
         //exchange = await(await ethers.deployContract("Exchange2", [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000])).waitForDeployment();
-        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange2"), 
+        exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
             [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000], 
             {
                 initializer: "initialize",
                 kind: "uups",
                 timeout: 0
-            })).waitForDeployment() as unknown as Exchange2;
+            })).waitForDeployment() as unknown as Exchange;
         console.log("exchange:", await exchange.getAddress());
         
         await (await gwt.enableMinter([await exchange.getAddress(), signers[0].address])).wait();
@@ -36,18 +36,41 @@ describe("Exchange", function () {
         await (await gwt.mint(signers[0].address, ethers.parseEther("10000000"))).wait();
     })
 
-    it("cycle 1", async () => {
+    it("test cycle", async () => {
         expect(await dmc.totalSupply()).to.equal(ethers.parseEther("1000000000"));
-        expect(await dmc.balanceOf(await dmc.getAddress())).to.equal(ethers.parseEther("999999000"));
+        expect(await dmc.balanceOf(await dmc.getAddress())).to.equal(ethers.parseEther("999900000"));
+
+        // 测试模式
+        await expect(exchange.freeMintGWT()).to.revertedWith("no free mint balance");
+
+        await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("210"))).wait();
+        await (await exchange.addFreeMintBalance(ethers.parseEther("210"))).wait();
+
+        await expect(exchange.freeMintGWT()).to.changeTokenBalance(gwt, signers[0], ethers.parseEther("210"));
+        await expect(exchange.freeMintGWT()).to.revertedWith("already free minted");
+
+        await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("1"))).wait();
+        await (await exchange.addFreeDMCTestMintBalance(ethers.parseEther("1"))).wait();
+
+        expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("1"));
+
+        await expect(exchange.GWTtoDMC(ethers.parseEther("210"))).to.be.revertedWith("contract in test mode");
+    })
+
+    it("enable prod mode", async () => {
+        await (await exchange.enableProdMode()).wait();
+
+        await expect(exchange.enableProdMode()).to.revertedWith("contract not in test mode");
+        await expect(exchange.GWTToDMCForTest(ethers.parseEther("100"))).to.revertedWith("contract not in test mode");
+    });
+
+    it("cycle 1", async () => {
         // 兑换DMC到GWT
         await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("1"))).wait();
 
         // 用1 DMC兑换GWT，能兑换1*210*1.2个
         await expect(exchange.DMCtoGWT(ethers.parseEther("1"))).to.changeTokenBalance(gwt, signers[0], ethers.parseEther((1*210*1.2).toString()));
     });
-
-    //1476190476190476190
-    //1476190476190476300
 
     it("cycle 2", async () => {
         // 前进到时间1000之后，开启下一轮
