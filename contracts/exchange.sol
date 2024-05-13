@@ -61,10 +61,10 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     function initialize(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public initializer {
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
-        __Exchange2Upgradable_init(_dmcToken, _gwtToken, _fundationIncome, _min_circle_time);
+        __ExchangeUpgradable_init(_dmcToken, _gwtToken, _fundationIncome, _min_circle_time);
     }
 
-    function __Exchange2Upgradable_init(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public onlyInitializing {
+    function __ExchangeUpgradable_init(address _dmcToken, address _gwtToken, address _fundationIncome, uint256 _min_circle_time) public onlyInitializing {
         require(_min_circle_time > 0);
         dmcToken = _dmcToken;
         gwtToken = _gwtToken;
@@ -186,8 +186,12 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         
         is_free_minted[msg.sender] = true;
         free_mint_balance -= 210 ether;
-        GWT(gwtToken).mint(msg.sender, 210 ether);
-    }   
+        GWT(gwtToken).transfer(msg.sender, 210 ether);
+    }
+
+    function canFreeMint() view public returns (bool) {
+        return !is_free_minted[msg.sender];
+    }
 
     function DMCtoGWT(uint256 amount) public {
         DMC(dmcToken).burnFrom(msg.sender, amount);
@@ -241,8 +245,9 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     
     // 手工将累积的收入打给分红合约
     function transferIncome() public {
-        GWT(gwtToken).approve(fundationIncome, GWT(gwtToken).balanceOf(address(this)));
-        DividendContract(payable(fundationIncome)).deposit(GWT(gwtToken).balanceOf(address(this)), address(gwtToken));
+        uint256 income = GWT(gwtToken).balanceOf(address(this)) - free_mint_balance;
+        GWT(gwtToken).approve(fundationIncome, income);
+        DividendContract(payable(fundationIncome)).deposit(income, address(gwtToken));
     }
 
     function getCycleInfo() public view returns (uint256, uint256, uint256) {
