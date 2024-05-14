@@ -15,7 +15,7 @@ contract DMCBridge is Ownable {
     }
 
     function getClaimableDMC2(string calldata cookie) public view returns (uint256) {
-        return dmc1_to_dmc2[keccak256(abi.encodePacked(msg.sender, cookie))] * 79 / 100;
+        return dmc1_to_dmc2[keccak256(abi.encodePacked(msg.sender, cookie))];
     }
 
     function registerDMC1(address[] calldata recvAddress, string[] calldata cookie, uint256[] calldata dmc1Amount) onlyOwner public {
@@ -28,7 +28,7 @@ contract DMCBridge is Ownable {
     function claimDMC2(string calldata cookie) public {
         bytes32 key = keccak256(abi.encodePacked(msg.sender, cookie));
         require(dmc1_to_dmc2[key] > 0, "no dmc1 amount");
-        uint256 dmc2Amount = dmc1_to_dmc2[key] * 79 / 100;
+        uint256 dmc2Amount = dmc1_to_dmc2[key];
         dmc1_to_dmc2[key] = 0;
         
         dmc2.transfer(msg.sender, dmc2Amount);

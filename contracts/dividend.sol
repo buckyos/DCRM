@@ -19,9 +19,6 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     // current cycle index, start at 0
     uint256 public currentCycleIndex;
 
-    // the start block of the cycle of the contract
-    uint256 public cycleStartBlock;
-
     struct RewardInfo {
         address token;
         uint256 amount;
@@ -35,7 +32,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     struct CycleInfo {
         // The start block of the cycle
-        uint256 startBlock;
+        uint256 startBlocktime;
 
         // the total stake amount of the curent cycle
         uint256 totalStaked;
@@ -87,12 +84,13 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
-        cycleStartBlock = block.number;
 
         for (uint i = 0; i < _tokenList.length; i++) {
             tokenWhiteList[_tokenList[i]] = true;
             tokenWhiteListArray.push(_tokenList[i]);
         }
+
+        cycles[0].startBlocktime = block.timestamp;
     }
 
     function getCurrentCycleIndex() public view returns (uint256) {
@@ -333,21 +331,21 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     // check point for the new cycle
     function tryNewCycle() public {
-        uint256 currentBlock = block.number;
+        uint256 currentBlocktime = block.timestamp;
         
         CycleInfo storage currentCycle = cycles[currentCycleIndex];
-        if (currentBlock - currentCycle.startBlock >= cycleMaxLength) {
+        if (currentBlocktime - currentCycle.startBlocktime >= cycleMaxLength) {
             currentCycleIndex = currentCycleIndex + 1;
-            // console.log("enter new cycle %d, totalStaked %d", currentCycleIndex, totalStaked);
+            console.log("enter new cycle %d, totalStaked %d", currentCycleIndex, totalStaked);
             CycleInfo storage newCycle = cycles[currentCycleIndex];
-            newCycle.startBlock = currentBlock;
+            newCycle.startBlocktime = currentBlocktime;
             newCycle.totalStaked = totalStaked;
             
             if (currentCycle.totalStaked == 0) {
                 newCycle.rewards = currentCycle.rewards;
             }
 
-            emit NewCycle(currentCycleIndex, currentBlock);
+            emit NewCycle(currentCycleIndex, currentBlocktime);
         }
     }
 
