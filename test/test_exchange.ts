@@ -58,6 +58,8 @@ describe("Exchange", function () {
     })
 
     it("enable prod mode", async () => {
+        // 模拟在开启生产模式之前过了很久，超过一个周期的情况
+        mine(20, {interval: 1000});
         await (await exchange.enableProdMode()).wait();
 
         await expect(exchange.enableProdMode()).to.revertedWith("contract not in test mode");

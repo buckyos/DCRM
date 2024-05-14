@@ -77,7 +77,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         test_mode = true;
 
-        _newCycle();
+        //_newCycle();
     }
 
     function getCircleBalance(uint256 circle) public view returns (uint256) {
@@ -207,6 +207,11 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         // 将剩余的DMC还给owner
         DMC(dmcToken).transfer(msg.sender, DMC(dmcToken).balanceOf(address(this)));
+
+        // 如果是首次开启生产模式，初始化第一个周期
+        if (current_circle == 0) {
+            _newCycle();
+        }
     }
 
     function addFreeDMCTestMintBalance(uint256 amount) public onlyOwner testEnabled {
