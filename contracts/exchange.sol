@@ -72,8 +72,8 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         min_circle_time = _min_circle_time;
 
         dmc2gwt_rate = 210;
-        adjust_period = 21;
-        initial_dmc_balance = 972459 ether;
+        adjust_period = 20;
+        initial_dmc_balance = 5046546 ether;
 
         test_mode = true;
 
