@@ -101,6 +101,18 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return cycles[currentCycleIndex];
     }
 
+    function getCycleInfos(uint256 startCycle, uint256 endCycle) public view returns (CycleInfo[] memory) {
+        require(startCycle <= endCycle, "Invalid cycle range");
+        require(endCycle <= currentCycleIndex, "Invalid cycle range");
+
+        CycleInfo[] memory cycleInfos = new CycleInfo[](endCycle - startCycle + 1);
+        for (uint i = startCycle; i <= endCycle; i++) {
+            cycleInfos[i - startCycle] = cycles[i];
+        }
+
+        return cycleInfos;
+    }
+
 
     function addTokenToWhitelist(address token) public onlyOwner {
         if (!tokenWhiteList[token]) {
