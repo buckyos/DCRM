@@ -46,6 +46,8 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         uint256 maxDeposit;
         uint256 dataBalance;
         uint64 depositRatio;
+        
+        mapping(address => uint256) show_records;//miner address - > last show time
         //uint64 point;
     }
 
@@ -78,6 +80,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         address[] lastShowers;
         uint64 score;// score = 0表示已经提现过了
         uint8 showerIndex;
+        uint64 showCount;//在这个周期里的总show次数，
     }
 
     struct CycleInfo {
@@ -85,6 +88,7 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
         SortedScoreList.List scoreList;
         uint256 totalAward;    // 记录这个cycle的总奖励
+        uint256 totalShowPower;//记录这个cycle的总算力
     }
 
     struct CycleOutputInfo {
@@ -449,6 +453,37 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
         }
         
     }
+    function _getGWTDifficultRatio() private view returns(uint256) {
+        //这个函数本质上，返回的是周利率
+        //1）根据总算力计算基础难度值，算力每次翻倍，基础难度值都会下降 从<= 1PB 开始， 2PB，4PB，8PB，16PB，32PB，64PB，128PB，256PB，512PB .. 都会调整基础难度值
+        // 倍率结果为8x - 1x，当总算力是1PB(GWT)时， 倍率为8x,随后算力每增加一倍，倍率下降10%。 倍率 = 0.9^(log2(总算力/1PB)),每次总算力翻倍，倍率为上一档倍率的90% 
+        // 约21次难度调整后会变成1x,此时系统容量已经是 1PB * 2^21 = 2EB
+        //2）根据算力增速x计算基准GWT利率（增发速度），y = f(x),x的值域是从[0,正无穷] y的取值范围最小值是 0.2%, 最大值是 2%
+        
+        //根据上述规则，一周的GWT挖矿比例最大，是抵押总数的  16%（周回报16%）。即矿工在公共数据挖矿中质押了100个GWT，在1周后，能挖出16个GWT，接近6.25周回本
+        //如果早期算力总量低，但没什么人挖，则周回报为 1.6%（周回报1.6%），即矿工在公共数据挖矿中质押了100个GWT，在1周后，能挖出1.6个GWT，接近62.5周回本
+
+        uint256 lastCyclePower = _cycleInfos[_currectCycle - 2].totalShowPower;
+        uint256 curCyclePower = _cycleInfos[_currectCycle - 1].totalShowPower;
+        uint256 base_r = 0.002; //基础利率
+        if(curCyclePower == 0) {
+           base_r = 0.01;
+        } else {
+            //给我一个数学函数，满足：y = f(x),x的含义是增长率的值域是从[0,正无穷] y的取值范围最小值是 0.2%, 最大值是 2%。 我希望在x在200%(2倍前）,y能快速的增长到1%
+            if(curCyclePower > lastCyclePower) {
+                base_r = 0.002 + 0.008 * (curCyclePower - lastCyclePower) / lastCyclePower;
+                if(base_r > 0.02) {
+                    base_r = 0.02;
+                }
+            }
+        }
+        // 8 * 0.9^(log2((curCyclePower / 1PB)));
+        uint256 ratio = 8 * 0.9^(log2((curCyclePower / 1024*1024))); 
+        if(ratio < 1) {
+            ratio = 1;
+        }
+        return ratio * base_r;
+    }
 
     function _onProofSuccess(DataProof storage proof,PublicData storage publicDataInfo,bytes32 dataMixedHash) private {
         uint256 reward = publicDataInfo.dataBalance / 10;
@@ -481,6 +516,41 @@ contract PublicDataStorage is Initializable, UUPSUpgradeable, OwnableUpgradeable
                 cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
             }
             cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
+        }
+
+        //获得gwt 挖矿奖励
+        lastRecordShowTime = publicDataInfo.show_records[msg.sender];
+        if(lastRecordShowTime ==0) {
+            publicDataInfo.show_records[msg.sender] = block.timestamp;
+        } else {
+            if(block.timestamp - lastRecordShowTime > 1 weeks) {
+                //获得有效算力!
+                // reward = 文件大小* T * 存储质量比率（含质押率） * 公共数据挖矿难度比 
+                // T = 当前时间 - 上次show时间，T必须大于1周，最长为4周
+                publicDataInfo.show_records[msg.sender] = block.timestamp;
+                uint32 storageWeeks = (block.timestamp - lastRecordShowTime) / 1 weeks;
+                if(storageWeeks > 4) {
+                    storageWeeks = 4;
+                }
+                uint256 size = PublicDataProof.lengthFromMixedHash(dataMixedHash) >> 30;
+                if (size == 0) {
+                    // 1GB以下算1G
+                    return 1;
+                }
+                
+                uint256 storagePower = size * storageWeeks ;
+                //更新当前周期的总算力，公共数据的算力是私有数据的3倍
+                cycleInfo.totalShowPower += storagePower* 3;
+
+                //计算挖矿奖励，难度和当前算力总量，上一个周期的算力总量有关
+                uint256 gwtReward = storagePower * publicDataInfo.depositRatio * _getGWTDifficultRatio();
+
+                //更新奖励，80%给矿工，20%给当前数据的余额
+                gwtToken.mint(msg.sender, gwtReward*0.8);    
+                //TODO:是否需要留一部分挖矿奖励给基金会？目前思考是不需要的
+                gwtToken.mint(this, gwtReward*0.2);
+                publicDataInfo.dataBalance += gwtReward*0.2;
+            }
         }
     }
 
