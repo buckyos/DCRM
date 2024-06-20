@@ -642,4 +642,60 @@ describe("Devidend", function () {
             ).to.equal(true);
         }
     });
+
+    it("test transfer external", async () => {
+        const current_index = await dividend.getCurrentCycleIndex();
+        const current_balance = await dividend.getDepositTokenBalance(await gwt.getAddress());
+
+        mine(2, { interval: 1000 });
+        expect(await dividend.getCurrentCycleIndex()).to.equal(current_index);
+
+        {
+            // Try update the token balance, balance not change so will not step to next cycle
+            await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index);
+            expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+                current_balance
+            );
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index);
+
+
+            // Deposit 90 GWT, will step to next cycle
+            await (await dividend.deposit(90, await gwt.getAddress())).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 1n);
+
+            // Update token balance, balance not changed so will not step to next cycle
+            await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 1n);
+            expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+                current_balance + 90n
+            );
+
+            mine(2, { interval: 1000 });
+
+            // direct transfer to dividend contract and update token balance, will step to next cycle
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 1n);
+            await (await gwt.transfer(await dividend.getAddress(), 10)).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 1n);
+
+            // Update token balance, balance changed so will step to next cycle
+            await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 2n);
+            expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+                current_balance + 100n
+            );
+
+            mine(2, { interval: 1000 });
+
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 2n);
+
+            // Update token balance, balance changed so will step to next cycle
+            await (await dividend.updateTokenBalance(await gwt.getAddress())).wait();
+            expect(await dividend.getCurrentCycleIndex()).to.equal(current_index + 2n);
+
+            expect(await dividend.getDepositTokenBalance(gwt.getAddress())).to.equal(
+                current_balance + 100n
+            );
+        }
+    });
 });
