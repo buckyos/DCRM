@@ -213,6 +213,8 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         require(balance >= tokenBalances[token], "Invalid balance state");
         if (balance > tokenBalances[token]) {
+            tryNewCycle();
+            
             uint256 diff = balance - tokenBalances[token];
             _depositToken(token, diff);
         }
