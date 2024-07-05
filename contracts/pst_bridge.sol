@@ -20,13 +20,13 @@ contract PSTBridge is Ownable {
 
     function registerPST(address[] calldata recvAddress, string[] calldata cookie, uint256[] calldata pstAmount) onlyOwner public {
         for (uint i = 0; i < recvAddress.length; i++) {
-            pst_to_gwt[keccak256(abi.encodePacked(recvAddress[i], cookie[i]))] = pstAmount[i] / 210;
+            pst_to_gwt[keccak256(abi.encodePacked(recvAddress[i], cookie[i]))] = pstAmount[i] * (10 ** 18);
         }
     }
 
     function claimGWT(string calldata cookie) public {
         bytes32 key = keccak256(abi.encodePacked(msg.sender, cookie));
-        require(pst_to_gwt[key] > 0, "no dmc1 amount");
+        require(pst_to_gwt[key] > 0, "no GWT amount");
         uint256 gwtAmount = pst_to_gwt[key];
         pst_to_gwt[key] = 0;
         

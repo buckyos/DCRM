@@ -12,7 +12,7 @@ contract DMC is ERC20Burnable, Ownable {
         _;
     }
 
-    constructor(uint256 _totalSupply, address[] memory initAddress, uint[] memory initAmount) ERC20("Datamall Chain Token", "DMC") Ownable(msg.sender) {
+    constructor(uint256 _totalSupply, address[] memory initAddress, uint[] memory initAmount) ERC20("Datamall Coin", "DMCX") Ownable(msg.sender) {
         uint256 totalInited = 0;
         for (uint i = 0; i < initAddress.length; i++) {
             _mint(initAddress[i], initAmount[i]);

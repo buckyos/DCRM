@@ -38,7 +38,7 @@ async function main() {
     console.log("Dividend address:", dividendAddress);
 
     let exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"),
-        [await dmc.getAddress(), await gwt.getAddress(), dividendAddress, 7 * 24 * 60 * 60],
+        [await dmc.getAddress(), gwtAddress, dividendAddress, 7 * 24 * 60 * 60],
         {
             initializer: "initialize",
             kind: "uups",
@@ -47,10 +47,14 @@ async function main() {
     let exchangeAddr = await exchange.getAddress();
     console.log("exchange address:", exchangeAddr);
 
+    let pst = await (await ethers.deployContract("PSTBridge", [gwtAddress])).waitForDeployment();
+    let pstAddress = await pst.getAddress();
+    console.log("PSTBridge address:", pstAddress);
+
     console.log("enable mint");
 
     await (await dmc.enableMinter([exchangeAddr])).wait();
-    await (await gwt.enableMinter([exchangeAddr])).wait();
+    await (await gwt.enableMinter([exchangeAddr, pstAddress])).wait();
 }
 
 main().then(() => process.exit(0));
