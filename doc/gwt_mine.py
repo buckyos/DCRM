@@ -1,3 +1,4 @@
+# x的含义是当前的增长率
 def mine_gwt(x):
     return 0.2 + (1.8*x) / (x + 1)
 

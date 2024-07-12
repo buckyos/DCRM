@@ -65,8 +65,7 @@ contract StorageExchange {
 
         uint8 supplyRatio; //16为1倍，最大值为 256 (16倍)
         uint8 demandRatio; //16为1倍，最大值为 256 (16倍)
-        //uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
-        uint16 rewardRate;//rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)
+        //uint16 totalSizeGrowth;//totalSizeGrowth 增长比例.用uint16表达的浮点数，逻辑范围是: (0, 2)
         //uint16 taxRate;//交易结算时，给到系统的交易费用比例
 
     }
@@ -143,7 +142,8 @@ contract StorageExchange {
             return currentPeriod;
         }
     }
-
+    
+    //TODO:算力越大，抽成越少
     function _getSystemRatio(uint128 /* totalActiveSize */) private pure returns (uint8) {
         return 127;
     }
@@ -169,28 +169,27 @@ contract StorageExchange {
     }
 
     function _mintGWT(uint256 /* amount */,address /* target */) private {
-        //TODO
+        //TODO 直接改成调用GWT合约的mint函数
     }
 
-    //输入x是用uint256表达的浮点数，其定点逻辑与返回值相同（取值范围是 (0,)）;返回一个用uint16表达的浮点数，返回值的逻辑范围是: (0, 2)
-    function _getFromCave(uint256 /* x */,uint128 /* totalSize */) private pure returns (uint16) {
+    //calcRewardRation有2个参数，一个是算力增长率(用上一个周期的总量算出来），一个是总算力,返回值的逻辑范围是: (0, 2)
+    //这个函数的基本设计思路是，算力越少，返回值越大，算力增长率越大，返回值越大。
+    function _calcRewardRation(uint256 lastTotalSize,uint128 totalSize) private pure returns (uint16) {
         //TODO
         return 1<<15;
     }
 
     function _calcReward(uint64 periodCount,uint64 size,uint16 price,uint8 guaranteeRatio,
-                         SystemState storage start_state,SystemState storage end_state) private view returns (uint256) {
+                         uint128 beforeStartTotalSize,SystemState storage start_state,uint128 beforeEndTotalSize,SystemState storage end_state) private view returns (uint256) {
         //price的单位是用uint16标示的标准倍数，其中 128为1倍，系统最小值为16，最大值为 1024， >>7
         //guaranteeRatio, 8（0.5倍），16 (1倍） 最大值为 256 (16倍)       >>4  
         //rewardRate 算力奖励的比例.用uint16表达的浮点数，逻辑范围是: (0, 2)  >>15
         
-        // 组合起来需要 >> 11
-        uint256 end_reward_rate = _getFromCave((uint256(price) * uint256(guaranteeRatio) >> 11)* uint256(end_state.rewardRate),end_state.totalActiveSize);
-        uint256 start_reward_rate = _getFromCave((uint256(price) * uint256(guaranteeRatio) >> 11)* uint256(start_state.rewardRate),start_state.totalActiveSize);
+        uint256 end_reward_ration = _calcRewardRation(beforeEndTotalSize, end_state.totalActiveSize);
+        uint256 start_reward_ration = _calcRewardRation(beforeStartTotalSize, start_state.totalActiveSize);
         
-        // 组合起来需要 >>26,算平均数/2,总共>>27
-        //periodCount * size * (end_reward_rate + start_reward_rate) / 2
-        return uint256(periodCount) * uint256(size) * sysFixPeriodPerWeek * (end_reward_rate + start_reward_rate) >> 27;
+        // time * size * （1+guaranteeRatio）*price*avgRewardRation， 
+        return uint256(periodCount) * uint256(size) * sysFixPeriodPerWeek * uint256(guaranteeRatio + 1) * (end_reward_ration + start_reward_ration) >> 27;
     }
 
 
@@ -233,7 +232,7 @@ contract StorageExchange {
     //创建订单，大部分情况是供应单，也可以是需求单
     function createStorageOrder(uint64 supplierId, uint64 size, uint16 quality, uint16 price, uint64 effectivePeriod, uint64 minimumPurchaseSize,
                                 uint8 guaranteeRatio, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         require(effectivePeriod >= sysMinEffectivePeriod, "Effective time too short");
         require(price >= sysMinPrice, "Price too low");
         uint256 totalPrice = _calcTotalPrice(effectivePeriod, price,size);
@@ -300,7 +299,7 @@ contract StorageExchange {
 
     //向一个订单购买存储空间
     function buyStorage(uint64 orderId, uint64 size,bytes32 rootHash,uint64 duration) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         StorageUsage storage usage_ = all_usage[rootHash];
         require(usage_.size == 0, "Usage Already exists");
@@ -337,7 +336,7 @@ contract StorageExchange {
     //向一个订单发送报价意向
     // 成交一个买单，是不是该用这个函数？缺少Usage的处理逻辑？但为什么叫报价意向？还有竞价的逻辑么？
     function makeOffer(uint64 supplierId,uint64 orderId,bytes32 /* rootHash */) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand orders can receive offers");
         require(order_.status == OrderStatus.Waiting, "Only waiting order can receive offers");
@@ -361,7 +360,7 @@ contract StorageExchange {
     // TODO:已经事实上没有usage的订单是否可以取消？这里的计算有点复杂
     // TODO:处理买单取消应该另开一个函数？
     function cancelOrder(uint64 orderId) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require((order_.supplierId !=0), "Only standard order can be cancelled");
 
@@ -380,7 +379,7 @@ contract StorageExchange {
 
     //释放限制空间并返还对应的保证金
     function freeOrderSpace(uint64 orderId,uint64 freeSize) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         StorageSupplier storage supplier_ = all_suppliers[order_.supplierId];
         require((order_.supplierId !=0), "Only standard order can be free");
@@ -405,7 +404,7 @@ contract StorageExchange {
     }
 
     function confirmUsageRoot(uint64 orderId,bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         StorageSupplier storage supplier_ = all_suppliers[order_.supplierId];
         StorageUsage storage usage_ = all_usage[rootHash];
@@ -435,7 +434,7 @@ contract StorageExchange {
 
     // 发起存储挑战
     function challenge(uint64 orderId,bytes32 rootHash, bytes32 challengeHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId != 0, "Only standard order can be challenged");
         
@@ -460,7 +459,7 @@ contract StorageExchange {
 
     // 响应简单挑战
     function respondChallenge(uint64 orderId, bytes32 rootHash,bytes calldata rawData) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand order can be challenged");
 
@@ -477,7 +476,7 @@ contract StorageExchange {
 
     //end & withdraw:  超时后，确认挑战成功，并提款 DONE
     function challengeSuccess(uint64 orderId, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand order can be challenged");
 
@@ -500,17 +499,20 @@ contract StorageExchange {
         StorageSupplier storage supplier_ = all_suppliers[order_.supplierId];
         uint64 startPeriod = usage_.lastWithDrawPeriod == 0?usage_.activePeriod:usage_.lastWithDrawPeriod;
         SystemState storage end_state = all_system_states[usage_.challengePeriod];
+        SystemState storage before_end_state = all_system_states[usage_.challengePeriod-1];
         SystemState storage start_state = all_system_states[startPeriod];
+        SystemState storage before_start_state = all_system_states[startPeriod-1];
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
         uint256 supplierIncome =  _calcTotalPrice(usage_.challengePeriod - startPeriod, order_.price, usage_.size);
         uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage_.effectivePeriod - usage_.activePeriod,order_.price,usage_.size),order_.guaranteeRatio);
-        uint256 reward = _calcReward(usage_.challengePeriod - startPeriod, usage_.size,order_.price,order_.guaranteeRatio,start_state,end_state);
+        //计算总的算力奖励
+        uint256 reward = _calcReward(usage_.challengePeriod - startPeriod, usage_.size,order_.price,order_.guaranteeRatio,before_start_state.totalActiveSize,start_state,before_end_state.totalActiveSize,end_state);
         
+        //计算算力奖励如何分给3方
         //supplyRatio:16为1倍，最大值为 256 (16倍)
         uint32 supplyRatio = uint32(end_state.supplyRatio + start_state.supplyRatio) / 2;
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
-       
         uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
         //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
         //(supply_rate * order_.guaranteeRatio) / (daemon_rate + supply_rate*order_.guaranteeRatio)
@@ -525,7 +527,7 @@ contract StorageExchange {
 
     //end & withdraw:  供应商主动说明数据丢失,DONE
     function reportDataLost(uint64 orderId, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand order can be challenged");
 
@@ -575,7 +577,7 @@ contract StorageExchange {
 
     //认为挑战设置的challengeHash并不是roothash的Merkle叶子节点
     function declearChallengeIllegal(uint64 orderId, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand order can be challenged");
         StorageUsage storage usage_ = all_usage[rootHash];
@@ -593,7 +595,7 @@ contract StorageExchange {
 
     //end & withdraw: 展示叶子节点的路径并验证,DONE
     function showChallengePath(uint64 orderId,bytes32 rootHash,uint64 dataIndex,bytes32[] calldata fullPath) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         require(order_.supplierId == 0, "Only demand order can be challenged");
         StorageUsage storage usage_ = all_usage[rootHash];
@@ -662,7 +664,7 @@ contract StorageExchange {
     }
     
     function leave(uint64 orderId,uint64 supplierId ) public {
-        updateComputeState();
+        updateComputePowerState();
         require(supplierId != 0, "Only supplier can leave");
 
         StorageOrder storage order_ = orders[orderId];
@@ -681,7 +683,7 @@ contract StorageExchange {
     }
 
     function resumeFromLeave(uint64 orderId,uint64 supplierId) public {
-        updateComputeState();
+        updateComputePowerState();
         require(supplierId != 0, "Only supplier can leave");
 
         StorageOrder storage order_ = orders[orderId];
@@ -695,7 +697,7 @@ contract StorageExchange {
 
     //活动订单中途提现 （必须是active）,DONE
     function withDraw(uint64 orderId, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         StorageUsage storage usage_ = all_usage[rootHash];
         require(usage_.orderId == orderId, "orderid not match");
@@ -732,7 +734,7 @@ contract StorageExchange {
 
     //end & withdraw,订单到期正常结束,调用会触发提现,DONE
     function endUsage(uint64 orderId, bytes32 rootHash) public {
-        updateComputeState();
+        updateComputePowerState();
         StorageOrder storage order_ = orders[orderId];
         StorageUsage storage usage_ = all_usage[rootHash];
         require(usage_.orderId == orderId, "orderid not match");
@@ -758,20 +760,21 @@ contract StorageExchange {
         uint32 demandRatio = uint32(end_state.demandRatio + start_state.demandRatio) / 2;
         
         uint8 systemRatio = _getSystemRatio((start_state.totalActiveSize + end_state.totalActiveSize)/2);
-        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / a + b*g;ration_b = b*g / (a+b*g)
+        //计算处理guaranteeRatio为标准倍数（1倍），实现基本的占比逻辑 ratio_a = a / (a + b*g); ration_b = b*g / (a+b*g)
         //(supply_rate * order_.guaranteeRatio) / (daemon_rate + supply_rate*order_.guaranteeRatio)
         uint256 supplierReward = ((((reward*systemRatio)>>8)* uint256(supplyRatio) * uint256(order_.guaranteeRatio))>>4) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order_.guaranteeRatio)>>4);
+        
         //daemon_rate / (daemon_rate + supply_rate*order_.guaranteeRatio)
         uint256 buyerReward = (((reward*systemRatio)>>8) * uint256(demandRatio)) / (uint256(demandRatio) + uint256(supplyRatio) * uint256(order_.guaranteeRatio)>>4);
-
+        
         _mintGWT(reward,address(this));
         gwtToken.transferFrom(address(this), supplier_.cfo, supplierIncome + supplierReward);
         gwtToken.transferFrom(address(this), usage_.buyer, buyerReward);
     }
     
 
-    // 更新算力奖励
-    function updateComputeState() public {
+    // 更新算力统计
+    function updateComputePowerState() public {
         SystemState storage state = all_system_states[currentPeriod];
         //判断是否可以结束当前period
         if(block.number - state.blockNumber <= sysBlockPerPeriod) {
@@ -779,17 +782,18 @@ contract StorageExchange {
         }
         SystemState storage lastState = all_system_states[currentPeriod-1]; //合约初始化的时候要初始化一个初始的计算状态，为各个经济学参数赋予初值
 
-        if(state.totalActiveSize > lastState.totalActiveSize) {
-            //计算 6周预期的增长数值growth 
-            uint128 growth = (state.totalActiveSize - lastState.totalActiveSize)*56*6;
-            //计算 rate = (growth / last_state.totalActiveSize) / 25% =  (growth*4 / last_state.totalActiveSize) ; 
+        //如果计算算力只需要知道周期的增长率的化，完全没有必要保存，直接结算就好了
+        //if(state.totalActiveSize > lastState.totalActiveSize) {
+        //    //计算 6周预期的增长数值growth 
+        //    uint128 growth = (state.totalActiveSize - lastState.totalActiveSize)*56*6;
+        //    //计算 rate = (growth / last_state.totalActiveSize) / 25% =  (growth*4 / last_state.totalActiveSize) ; 
             // 用 0-2^16 的整数代替浮点数，因此  rate = (growth*4 / last_state.totalActiveSize) * (2^15)
-            state.rewardRate  = uint16((growth<<17) / lastState.totalActiveSize);
-        } else {
+        //    state.totalSizeGrowth  = uint16((growth<<17) / lastState.totalActiveSize);
+        //} else {
             //存储空间下降，取最低值（TODO：计算下降比率，然后用lastState.rewardRate*下降比率）
             //  上述算法的主要问题是，有可能下降 还要比 增长 慢的效果更好。
-            state.rewardRate = 1638;//(0.05 * 2^15)
-        }
+        //    state.totalSizeGrowth = 1638;//(0.05 * 2^15)
+        //}
 
         //计算supplyRatio和demandRatio
         if(state.totalSupplyOrderSize > state.totalDemandOrderSize) {
@@ -809,6 +813,7 @@ contract StorageExchange {
         }
 
         //挂单奖励是根据rewardRate,suplyRation,demandRation计算，这里不用更新
+
         SystemState memory newState = state;
         newState.blockNumber = block.number;//TODO:还是应该用  lastState.blockNumber + sysBlockPerPeriod?
         // 要不要考虑一段时间内，没有任何交易的情况？可能会跳周期
@@ -822,36 +827,5 @@ contract StorageExchange {
         currentPeriod = currentPeriod + skipPeriod;
         all_system_states[currentPeriod] = newState;
     }
-
-
-    // TODO:兑换DMC和GWT (可以用DeFi逻辑实现和任意Token的兑换？)
-    //function exchangeDMCforGWT(uint256 dmcAmount) public {
-       // require(dmcToken.balanceOf(msg.sender) >= dmcAmount, "Insufficient DMC balance");
-        // 兑换逻辑，涉及市场价格、兑换率等
-
-        //emit DMCExchangedForGWT(msg.sender, dmcAmount, gwtAmount);
-    //}
-
-    //function exchangeGWTforDMC(uint256 gwtAmount) public {
-        //require(gwtToken.balanceOf(msg.sender) >= gwtAmount, "Insufficient GWT balance");
-        // 兑换逻辑，涉及市场价格、兑换率等
-
-        //emit GWTExchangedForDMC(msg.sender, gwtAmount, dmcAmount);
-    //}
-
-    //LP逻辑
-
-    //系统LP，绑定一种DAOToken，用于分红，分红的收入来源是系统的tax,包括GWT和内置交易所的收入
-    //基本思路： 质押DAOToken，参与下一个分红周期的分红（8周分红一次）
-    //分红逻辑：每个周期，系统会计算所有LP的总质押量，然后按照质押量比例分配分红，LP可以随时提取自己归属的分红，但提取DAO Token后，会至少miss一个周期的分红
-
-    // 暂停和恢复合约操作，作为紧急措施
-    //function pauseContract() public onlyOwner {
-    //    // 实现合约暂停逻辑
-    //}
-
-    //function resumeContract() public onlyOwner {
-    //    // 实现合约恢复逻辑
-    //}
 
 }
