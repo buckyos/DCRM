@@ -87,7 +87,7 @@ contract StorageExchange {
     uint8 public sysPeriodPerWeek = 56; //一周是56个周期
     uint256 public sysFixPeriodPerWeek = 0;
     uint16 public sysMinPrice = 16; //最小价格，单位是128的倍数。最小值为 16 (12.5%) 最大值为 1024 (8倍)
-    uint8 public sysMinGuaranteeRatio = 8; //最小质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256
+    uint8 public sysMinGuaranteeRatio = 8; //最小质押率，单位是16的倍数。最小值为 8（0.5倍），最大值为 256, 我们鼓励的质押率是 3倍（假1赔3）
     //uint8 systemRatio; //计算算力奖励时，不给系统的比例，取值范围时（0，1）
     uint64 public sysMinEffectivePeriod = 56*24; //最小有效周期为 24周，一周是56个周期，24*56
     uint64 public sysMinActivePeriod = 2;//从wait转到active的最小周期
@@ -188,7 +188,7 @@ contract StorageExchange {
         uint256 end_reward_ration = _calcRewardRation(beforeEndTotalSize, end_state.totalActiveSize);
         uint256 start_reward_ration = _calcRewardRation(beforeStartTotalSize, start_state.totalActiveSize);
         
-        // time * size * （1+guaranteeRatio）*price*avgRewardRation， 
+        // time * size * （1+guaranteeRatio）*avgRewardRation，注意这里和价格没关系，只和质押率有关 
         return uint256(periodCount) * uint256(size) * sysFixPeriodPerWeek * uint256(guaranteeRatio + 1) * (end_reward_ration + start_reward_ration) >> 27;
     }
 
@@ -205,8 +205,11 @@ contract StorageExchange {
         return ((size * price * periodCount * (10**gwtToken.decimals())) >> 37) / sysFixPeriodPerWeek;
     }
 
-    function _calcDeposit(uint256 totalPrice,uint8 guaranteeRatio) private pure returns (uint256) {
-        return (totalPrice * guaranteeRatio)>>4;
+    function _calcDeposit(uint64 periodCount,uint16 price,uint64 size,uint8 guaranteeRatio) private pure returns (uint256) {
+        if(price < 128)
+            price = 128;
+
+        return ((((size * price * periodCount * (10**gwtToken.decimals())) >> 37) / sysFixPeriodPerWeek) * guaranteeRatio)>>4;
     }
 
     function createSupplier(address cfo,address[] calldata operators, string[] calldata urlprefixs,uint32 longtitude,uint32 latitude) public {
@@ -236,7 +239,7 @@ contract StorageExchange {
         require(effectivePeriod >= sysMinEffectivePeriod, "Effective time too short");
         require(price >= sysMinPrice, "Price too low");
         uint256 totalPrice = _calcTotalPrice(effectivePeriod, price,size);
-        uint256 depositAmount = _calcDeposit(totalPrice,guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(effectivePeriod,price,size,guaranteeRatio);
         require(depositAmount >= (totalPrice * sysMinGuaranteeRatio)>>4, "Deposit amount too small");
         
         if(supplierId != 0) {
@@ -345,7 +348,7 @@ contract StorageExchange {
         require(order_.effectivePeriod - currentPeriod <= sysMinEffectivePeriod, "wait order active");
         StorageSupplier storage supplier_ = all_suppliers[supplierId];
         require(_isValidOperator(supplier_,msg.sender), "Only operator can make offer");
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order_.effectivePeriod - currentPeriod, order_.price, order_.size),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(order_.effectivePeriod - currentPeriod, order_.price, order_.size,order_.guaranteeRatio);
 
         gwtToken.transferFrom(supplier_.cfo, address(this), depositAmount);
         order_.supplierId = supplierId;
@@ -373,7 +376,7 @@ contract StorageExchange {
         state.totalSupplyOrderSize -= order_.size;
 
         //TODO:挂单奖励
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order_.effectivePeriod - currentPeriod, order_.price, order_.size),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(order_.effectivePeriod - currentPeriod, order_.price, order_.size,order_.guaranteeRatio);
         gwtToken.transferFrom(address(this), supplier_.cfo, depositAmount);
     }
 
@@ -399,7 +402,7 @@ contract StorageExchange {
         state.totalSupplyOrderSize -= willFreeSize;
 
         //TODO：处理挂单奖励？严格的计算比较复杂，简单的计算要防止套路
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(order_.effectivePeriod - order_.createPeriod,order_.price,willFreeSize),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(order_.effectivePeriod - order_.createPeriod,order_.price,willFreeSize,order_.guaranteeRatio);
         gwtToken.transferFrom(address(this), all_suppliers[order_.supplierId].cfo, depositAmount);
     }
 
@@ -505,7 +508,7 @@ contract StorageExchange {
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
         uint256 supplierIncome =  _calcTotalPrice(usage_.challengePeriod - startPeriod, order_.price, usage_.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage_.effectivePeriod - usage_.activePeriod,order_.price,usage_.size),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(usage_.challengePeriod - startPeriod, order_.price, usage_.size,order_.guaranteeRatio);
         //计算总的算力奖励
         uint256 reward = _calcReward(usage_.challengePeriod - startPeriod, usage_.size,order_.price,order_.guaranteeRatio,before_start_state.totalActiveSize,start_state,before_end_state.totalActiveSize,end_state);
         
@@ -555,7 +558,7 @@ contract StorageExchange {
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
         uint256 supplierIncome =  _calcTotalPrice(currentPeriod - startPeriod, order_.price, usage_.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(currentPeriod - usage_.activePeriod,order_.price,usage_.size),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(currentPeriod - startPeriod, order_.price, usage_.size,order_.guaranteeRatio);
         uint256 reward = _calcReward(currentPeriod - startPeriod, usage_.size,order_.price,order_.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
@@ -628,7 +631,7 @@ contract StorageExchange {
         //供应商提取的是1）buyer按比例的费用 2)算力奖励
         //buyer提取的是：算力奖励
         uint256 supplierIncome =  _calcTotalPrice(usage_.challengePeriod - startPeriod, order_.price, usage_.size);
-        uint256 depositAmount = _calcDeposit(_calcTotalPrice(usage_.effectivePeriod - usage_.activePeriod,order_.price,usage_.size),order_.guaranteeRatio);
+        uint256 depositAmount = _calcDeposit(usage_.challengePeriod - startPeriod, order_.price,order_.guaranteeRatio);
         uint256 reward = _calcReward(usage_.challengePeriod - startPeriod, usage_.size,order_.price,order_.guaranteeRatio,start_state,end_state);
         
         //supplyRatio:16为1倍，最大值为 256 (16倍)
