@@ -2,11 +2,11 @@ import { ethers, upgrades } from "hardhat";
 import { DividendContract, Exchange } from "../typechain-types";
 
 /*
-DMC address: 0x05F2E406606f82Ec96DcE822B295278795c5053B
-GWT address: 0x191Af8663fF88823d6b226621DC4700809D042fa
-Dividend address: 0xD1AB647a6D3163bAD9D5C49C8A23Ee2811FC9e50
-exchange address: 0x785423901A501Bcef29Ab2a8cAFa25D5a8c027d3
-Layer1 DMC Address: 0x910e888698dA0C2eCC97A04A137Aa1CfC1Dfd209
+DMC address: 0x848e56Ad13B728a668Af89459851EfD8a89C9F58
+GWT address: 0x02F4AAda17e5Bb85d79De9aAC47cC6F3011023e6
+Dividend address: 0x940e289E7a846cE3382D7c5a1b718C8CAcd485ff
+exchange address: 0x6c8069f7C71F8C265C84cA3666Ab6e68f0832199
+PSTBridge address: 0x4ac99EA4CCD7f1743f977583328Bb8BEdfbf1993
 */
 
 async function main() {

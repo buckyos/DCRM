@@ -154,7 +154,7 @@ export async function main() {
         await (await publicDataStorage.setSysConfig(setConfig)).wait();
 
         let bridge = await (await ethers.getContractFactory("OwnedNFTBridge")).deploy();
-        await (await publicDataStorage.allowPublicDataContract([await bridge.getAddress()])).wait()
+        await (await publicDataStorage.allowPublicDataContract(await bridge.getAddress())).wait()
         depolyedInfo.Bridge = await bridge.getAddress();
         saveInfo();
     }

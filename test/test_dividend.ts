@@ -15,7 +15,8 @@ describe("Devidend", function () {
 
         dmc = await (await ethers.deployContract("DMC", [ethers.parseEther("1000000000"), [signers[0].address], [1000000]])).waitForDeployment()
         gwt = await (await ethers.deployContract("GWT", [[], []])).waitForDeployment()
-        dividend = await(await ethers.deployContract("DividendContract", [await dmc.getAddress(), 1000])).waitForDeployment();
+        dividend = await upgrades.deployProxy(await ethers.getContractFactory("DividendContract"), [await dmc.getAddress(), 1000, [await gwt.getAddress()]]) as unknown as DividendContract;
+        //dividend = await(await ethers.deployContract("DividendContract", [await dmc.getAddress(), 1000, [await gwt.getAddress()]])).waitForDeployment();
 
         // 给signers[0] 1000个GWT
         await (await gwt.enableMinter([signers[0].address])).wait()

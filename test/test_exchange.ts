@@ -18,7 +18,7 @@ describe("Exchange", function () {
         console.log("signers 0:", signers[0].address)
 
         dmc = await (await ethers.deployContract("DMC", [ethers.parseEther("1000000000"), [signers[0].address], [ethers.parseEther("100000")]])).waitForDeployment()
-        gwt = await (await ethers.deployContract("GWT", [[], []])).waitForDeployment()
+        gwt = await (await ethers.deployContract("GWT", [[signers[0].address], [ethers.parseEther("10000000")]])).waitForDeployment()
         //exchange = await(await ethers.deployContract("Exchange2", [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000])).waitForDeployment();
         exchange = await (await upgrades.deployProxy(await ethers.getContractFactory("Exchange"), 
             [await dmc.getAddress(), await gwt.getAddress(), ethers.ZeroAddress, 1000], 
@@ -29,11 +29,8 @@ describe("Exchange", function () {
             })).waitForDeployment() as unknown as Exchange;
         console.log("exchange:", await exchange.getAddress());
         
-        await (await gwt.enableMinter([await exchange.getAddress(), signers[0].address])).wait();
+        await (await gwt.enableMinter([await exchange.getAddress()])).wait();
         await (await dmc.enableMinter([await exchange.getAddress()])).wait();
-
-        // 给一些测试用的gwt先
-        await (await gwt.mint(signers[0].address, ethers.parseEther("10000000"))).wait();
     })
 
     it("test cycle", async () => {

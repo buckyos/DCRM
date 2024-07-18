@@ -41,8 +41,6 @@ contract DMCBridge is Ownable {
      * @notice cookie must same as the one used in registerDMC1
      */
     function claimDMC2(string calldata cookie) public {
-        // function implementation goes here
-    }
         bytes32 key = keccak256(abi.encodePacked(msg.sender, cookie));
         require(dmc1_to_dmc2[key] > 0, "no dmc1 amount");
         uint256 dmc2Amount = dmc1_to_dmc2[key];

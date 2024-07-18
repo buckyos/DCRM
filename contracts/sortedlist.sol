@@ -19,7 +19,7 @@ library SortedScoreList {
             current = self.sorted[current];
         }
 
-        // 这里其实只会去掉最后一个
+        // Only the last one will be removed here
         if (current != bytes32(0)) {
             self.sorted[prev] = bytes32(0);
             delete self.scores[current];
@@ -53,16 +53,15 @@ library SortedScoreList {
             return;
         }
 
-        // 由于max_length有限，这里做两次遍历也并不过多消耗性能
+        // Since max_length is limited, doing two traversals here doesn't cost so much gas.
         _deleteScore(self, mixedHash);
 
         bytes32 currect = self.head;
         bytes32 prev = bytes32(0);
         uint cur_index = 0;
         while (true) {
-            // 同score的数据先到先占，这里利用了score的默认值为0的特性，这个循环一定会结束
+            // since the default value of uint256 is 0, the loop will surely end
             if (self.scores[currect] < score) {
-                // TODO: 如果插入的数据是最后一个的话，会变成先插入再删除，这里可以优化
                 if (prev != bytes32(0)) {
                     self.sorted[prev] = mixedHash;
                 }
@@ -79,7 +78,7 @@ library SortedScoreList {
             self.head = mixedHash;
         }
 
-        // 这里认为，往存储里写一个bytes32 end的值，比遍历要贵
+        // I think that writing a bytes32 to storage is expensive than traversing the data
         _ensureSize(self);
     }
 

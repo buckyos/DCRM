@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract PSTBridge is Ownable {
     GWT public gwt;
 
-    // PST到GWT的兑换
     mapping(bytes32 => uint256) public pst_to_gwt;
 
     constructor(address _gwt) Ownable(msg.sender) {

@@ -3,6 +3,12 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+/**
+ * @title LuckyMint contract for DMCs
+ * @author weiqiushi@buckyos.com
+ * @notice this is a luckymint contract for DMCs, called by our bitcoin inscription backend server
+ */
+
 contract LuckyMint is Ownable {
     mapping(bytes32 => uint) lucky_mint;
     address public dataAdmin;

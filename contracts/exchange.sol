@@ -16,25 +16,26 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     address fundationIncome;
 
     bool test_mode;
-    // 当前周期，也可以看做周期总数
+    
+    // currect release cycle, also can be seen as the total cycle number
     uint256 current_circle;
     uint256 current_mine_circle_start;
 
-    // 这个周期内还能mint多少DMC
+    // remain DMCs can be mined in current cycle
     uint256 remain_dmc_balance;
 
-    // 这个周期的能mint的DMC总量
+    // total DMCs can be mined in current cycle
     uint256 current_circle_dmc_balance;
     uint256 current_finish_time;
     uint256 public dmc2gwt_rate;
 
-    // 总共未mint的DMC总量，这个值会慢慢释放掉
+    // total DMC balance not be minted in past cycles, it will be minted in future cycles slowly
     uint256 total_addtion_dmc_balance;
 
-    // 没有挖完的周期总数
+    // the number of cycle in which the minted DMCs not as much as current_circle_dmc_balance
     uint256 addtion_circle_count;
     
-    // 周期的最小时长
+    // min circle time, in seconds
     uint256 min_circle_time;
 
     //uint256 total_mine_period = 420;
@@ -92,13 +93,14 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function _newCycle() internal {
-        //移动到下一个周期
+        //move to next cycle
         current_circle = current_circle + 1;
         current_mine_circle_start = block.timestamp;
 
         remain_dmc_balance = getCircleBalance(current_circle);
 
         if(total_addtion_dmc_balance > 0) {
+            // if there has some DMCs not be mined in past cycles, we will mint some of them in next cycles
             uint256 this_addtion_dmc = total_addtion_dmc_balance / addtion_circle_count;
             total_addtion_dmc_balance -= this_addtion_dmc;
             
@@ -112,7 +114,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function adjustExchangeRate() internal {
         if(block.timestamp >= current_mine_circle_start + min_circle_time) {
-            //结束当前挖矿周期
+            //end current cycle, calculate new exchange rate
             uint256 old_rate = dmc2gwt_rate;
             if(remain_dmc_balance > 0) {
                 total_addtion_dmc_balance += remain_dmc_balance;
@@ -120,14 +122,14 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
                 // console.log("prev cycle dmc balance left %d, total left %d, total left cycle %d", remain_dmc_balance, total_addtion_dmc_balance, addtion_circle_count);
 
-                //本周期未挖完，降低dmc2gwt_rate
+                //there has remaining DMCs in current cycle, decrease DMC -> GWT exchange rate
                 dmc2gwt_rate = dmc2gwt_rate * (1-remain_dmc_balance/current_circle_dmc_balance);
                 if (dmc2gwt_rate < old_rate * 4 / 5) {
-                    // 跌幅限制为20%
+                    // we have a limit down as 20%
                     dmc2gwt_rate = old_rate * 4 / 5;
                 }
                 if(dmc2gwt_rate < 210) {
-                    // 最低值为210
+                    // the lowest rate is 210
                     dmc2gwt_rate = 210;
                 }
                 // console.log("decrease dmc2gwt_rate to %d", dmc2gwt_rate);
@@ -135,14 +137,14 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 if (addtion_circle_count > 0) {
                     addtion_circle_count -= 1;
                 }
-                //本周期挖完了，提高dmc2gwt_rate
+                // all DMCs in current cycle have been mined, increase DMC -> GWT exchange rate
                 dmc2gwt_rate = dmc2gwt_rate * (1+(current_finish_time-current_mine_circle_start)/min_circle_time);
                 if(dmc2gwt_rate > old_rate * 6 / 5) {
-                    // 涨幅限制为20%
+                    // we have a raising limit as 20%
                     dmc2gwt_rate = old_rate * 6 / 5;
                 }
                 // for test
-                //dmc2gwt_rate = 210;
+                // dmc2gwt_rate = 210;
                 // console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
@@ -161,7 +163,8 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         if(remain_dmc_balance > amount) {
             remain_dmc_balance -= amount;
         } else {
-            // 待确认：我将current_finish_time看作是一轮DMC释放完毕的时间，但这会导致gwt的汇率计算可能与GWT的实际兑换情况无关
+            // NEED NOTICE: if we have more than one tokens needed to exchanged from DMC,they will share the DMC mint limit in one cycle
+            // Rate calculation logic above may need be fixed.
             current_finish_time = block.timestamp;
 
             real_amount = remain_dmc_balance;
@@ -179,8 +182,8 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function freeMintGWT() public {
-        //每个地址只能free mint一次
-        //每次成功得到210个GWT
+        //one address only can free mint once
+        //get 210 GWT
         require(!is_free_minted[msg.sender], "already free minted");
         require(free_mint_balance > 0, "no free mint balance");
         
@@ -205,7 +208,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     function enableProdMode() public onlyOwner testEnabled {
         test_mode = false;
 
-        // 将剩余的DMC还给owner
+        // return remaining DMCs to owner, those DMCs comes from owner called addFreeDMCTestMintBalance in test mode.
         DMC(dmcToken).transfer(msg.sender, DMC(dmcToken).balanceOf(address(this)));
 
         // 如果是首次开启生产模式，初始化第一个周期
@@ -242,13 +245,13 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             real_gwt_amount = real_dmc_amount * dmc2gwt_rate;
         }
 
-        //不用立刻转给分红合约，而是等积累一下
+        // The GWT received from the sender first stored in the contract address.
         GWT(gwtToken).transferFrom(msg.sender, address(this), real_gwt_amount);
         DMC(dmcToken).mint(msg.sender, real_dmc_amount);
         emit DMCMinted(msg.sender, real_dmc_amount, remain_dmc_balance);
     }
     
-    // 手工将累积的收入打给分红合约
+    // Manually transfer the remaining GWT to a income distribution contract, usually a DividendContract
     function transferIncome() public {
         uint256 income = GWT(gwtToken).balanceOf(address(this)) - free_mint_balance;
         GWT(gwtToken).approve(fundationIncome, income);

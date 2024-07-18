@@ -10,19 +10,16 @@ library PublicDataProof {
     }
 
     function calcDataProof(bytes32 dataMixedHash, bytes32 nonce, uint32 index, bytes16[] calldata m_path, bytes calldata leafdata, bytes32 noise) public pure returns(bytes32,bytes32) {
-        //先验证index落在MixedHash包含的长度范围内
+        // First verify that index in the length range contained in the MixedHash.
         require(index < (lengthFromMixedHash(dataMixedHash) >> 10) + 1, "invalid index");
-
-        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
         
         HashType hashType = hashTypeFromMixedHash(dataMixedHash);
 
         bytes32 dataHash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType,leafdata));
-        //验证leaf_data+index+path 和 dataMixedHash是匹配的,不匹配就revert
-        // 只比较后192位
+
+        // Compare the last 192 bits only
         require(dataHash & bytes32(uint256((1 << 192) - 1)) == dataMixedHash & bytes32(uint256((1 << 192) - 1)), "mixhash mismatch");
 
-        // 不需要计算插入位置，只是简单的在Leaf的数据后部和头部插入，也足够满足我们的设计目的了？
         bytes32 new_root_hash = _merkleRoot(hashType,m_path,index, _hashLeaf(hashType, bytes.concat(leafdata, nonce)));
         bytes32 pow_hash = bytes32(0);
 
@@ -35,11 +32,10 @@ library PublicDataProof {
     }
 
     function lengthFromMixedHash(bytes32 dataMixedHash) public pure returns (uint64) {
-        //REVIEW 1<<62是常数，会不会每次都消耗GAS计算？
         return uint64(uint256(dataMixedHash) >> 192 & ((1 << 62) - 1));
     }
 
-    // hash的头2bits表示hash算法，00 = sha256, 10 = keccak256
+    // The first 2 bits of hash represent the hash algorithm，00 = sha256, 10 = keccak256
     function hashTypeFromMixedHash(bytes32 dataMixedHash) public pure returns (HashType) {
         return HashType(uint8(uint256(dataMixedHash) >> 254));
     }
@@ -102,8 +98,8 @@ library PublicDataProof {
         return computedHash;
     }
 
-    // sha256要比keccak256贵，因为它不是一个EVM内置操作码，而是一个预置的内部合约调用
-    // 当hash 1kb数据时，sha256要贵160，当hash 两个bytes32时，sha256要贵400
+    // sha256 is more expensive than keccak256 because it is not an EVM built-in opcode, but a pre-built internal contract call
+    // When hashing 1kb of data, sha256 is costs 160 more than keccak256, and when hashing two bytes32, sha256 is costs 400 more.
     function _merkleRootWithSha256(bytes16[] calldata proof, uint32 leaf_index, bytes16 leaf_hash) internal pure returns (bytes32) {
         bytes16 currentHash = leaf_hash;
         bytes32 computedHash = 0;

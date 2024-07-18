@@ -9,7 +9,6 @@ contract ERC721NFTSelfBridge is IERCPublicDataContract, Ownable {
     struct NFTInfo {
         uint256 tokenId;
         address nftAddress;
-        bool inited;
     }
 
     mapping (bytes32 => NFTInfo) hashInfo;
@@ -20,11 +19,11 @@ contract ERC721NFTSelfBridge is IERCPublicDataContract, Ownable {
     function setTokenId(bytes32[] calldata dataMixedHash, address[] calldata nftAddress, uint256[] calldata tokenId) public {
         for (uint i = 0; i < dataMixedHash.length; i++) {
             if (owner() != _msgSender()) {
-                require(!hashInfo[dataMixedHash[i]].inited, "Already initialized");
+                require(hashInfo[dataMixedHash[i]].nftAddress == address(0), "Already initialized");
             }
             require(IERC721(nftAddress[i]).supportsInterface(type(IERC721).interfaceId), "Not ERC721");
 
-            hashInfo[dataMixedHash[i]] = NFTInfo(tokenId[i], nftAddress[i], true);
+            hashInfo[dataMixedHash[i]] = NFTInfo(tokenId[i], nftAddress[i]);
         }
     }
 
