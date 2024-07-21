@@ -57,7 +57,6 @@ contract PublicDataStorage is
         uint256 dataBalance;
         uint64 depositRatio;
         mapping(address => uint256) show_records; //miner address - > last show time
-        //uint64 point;
     }
 
     struct PublicDataForOutput {
@@ -119,7 +118,7 @@ contract PublicDataStorage is
     uint64 _minRankingScore;
 
     struct SysConfig {
-        uint32 minDepositRatio;
+        uint32 minPledgeRate;
         uint32 minPublicDataStorageWeeks;
         uint32 minLockWeeks;
         uint32 blocksPerCycle;
@@ -186,7 +185,7 @@ contract PublicDataStorage is
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
 
-        sysConfig.minDepositRatio = 64; // Create data is the minimum of 64 times
+        sysConfig.minPledgeRate = 64; // Create data is the minimum of 64 times
         sysConfig.minPublicDataStorageWeeks = 96; //Create data is the minimum of 96 weeks
         sysConfig.minLockWeeks = 24; // sThe minimum is 24 weeks when it is at the current fixed value
         sysConfig.blocksPerCycle = 17280; // Each cycle is 72 hours
@@ -324,18 +323,18 @@ contract PublicDataStorage is
         return _cycleNumber(block.number, _startBlock);
     }
 
-    // 通过记录一个最后的周期来解决周期之间可能有空洞的问题
+    // By recording a final cycle, there may be empty cycle problems between cycles
     function _ensureCurrentCycleStart() internal returns (CycleInfo storage) {
         uint256 cycleNumber = _curCycleNumber();
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
-        // 如果cycle的reward为0，说明这个周期还没有开始
-        // 开始一个周期：从上个周期的奖励中拿20%
+        // If Cycle's reward is 0, it means that this cycle has not yet begun
+        // Start a cycle: 20% from the reward of the previous cycle
         if (cycleInfo.totalAward == 0) {
             uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
-            // 5%作为基金会收入
+            // 5%as a foundation income
             uint256 fundationIncome = (lastCycleReward * 5) / 100;
             gwtToken.transfer(foundationAddress, fundationIncome);
-            // 如果上一轮的获奖数据不足32个，剩余的奖金也滚动进此轮奖池
+            // If the last round of the award -winning data is less than 32, the remaining bonuses are also rolled into this round prize pool
             uint16 remainScore = _getRemainScore(
                 _cycleInfos[_currectCycle].scoreList.length()
             );
@@ -355,8 +354,8 @@ contract PublicDataStorage is
         cycleInfo.totalAward += amount;
     }
 
-    // 计算这些空间对应多少GWT，单位是wei
-    // 不满128MB的按照128MB计算
+    // Calculate how much GWT corresponds to these spaces, the unit is wei
+    // Under 128MB, calculate at 128MB
     function _dataSizeToGWT(uint64 dataSize) internal view returns (uint256) {
         uint64 fixedDataSize = dataSize;
         if (fixedDataSize < sysConfig.minDataSize) {
@@ -365,9 +364,18 @@ contract PublicDataStorage is
         return (uint256(fixedDataSize) * 10 ** 18) >> 30;
     }
 
+    /**
+    * @dev Create(Register) public data, To become public data, any data needs to be registered in public data contracts first
+    * @param dataMixedHash The hash of the data
+    * @param pledgeRate The pledge rate of the data
+    * @param depositAmount The pledge amount of the data
+    *        depositAmount >= data size*gwt exchange ratio*minimum hour length*pledgeRate
+    * @param publicDataContract The address of the NFT contract
+    *        This NFT Contract must implement the IERCPublicDataContract interface,can get the owner of the data
+    */
     function createPublicData(
         bytes32 dataMixedHash,
-        uint64 depositRatio,
+        uint64 pledgeRate,
         uint256 depositAmount,
         address publicDataContract
     ) public {
@@ -381,15 +389,15 @@ contract PublicDataStorage is
             "not found in data contract"
         );
 
-        // 质押率影响用户SHOW数据所需要冻结的质押
+        // The pledge rate affects the pledge that the user's Show data needs to be frozen
         require(
-            depositRatio >= sysConfig.minDepositRatio,
+            pledgeRate >= sysConfig.minPledgeRate,
             "deposit ratio is too small"
         );
-        // minAmount = 数据大小*GWT兑换比例*最小时长*质押率
+        // minamount = data size*gwt exchange ratio*minimum hour length*pledge rate
         // get data size from data hash
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 minAmount = depositRatio *
+        uint256 minAmount = pledgeRate *
             _dataSizeToGWT(dataSize) *
             sysConfig.minPublicDataStorageWeeks *
             sysConfig.createDepositRatio;
@@ -398,7 +406,7 @@ contract PublicDataStorage is
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
         require(publicDataInfo.maxDeposit == 0, "public data already exists");
 
-        publicDataInfo.depositRatio = depositRatio;
+        publicDataInfo.depositRatio = pledgeRate;
         publicDataInfo.maxDeposit = depositAmount;
         publicDataInfo.sponsor = msg.sender;
         publicDataInfo.dataContract = publicDataContract;
@@ -410,12 +418,11 @@ contract PublicDataStorage is
 
         _addCycleReward(system_reward);
 
-        // TODO: PublicData的奖励在哪里？
-
         emit PublicDataCreated(dataMixedHash);
         emit SponsorChanged(dataMixedHash, address(0), msg.sender);
         emit DepositData(msg.sender, dataMixedHash, balance_add, system_reward);
     }
+
 
     function getPublicData(
         bytes32 dataMixedHash
@@ -507,6 +514,10 @@ contract PublicDataStorage is
         }
     }
 
+    /**
+     * @dev Package GWT and become a supplier, you can show public data after becoming SUPPLIER
+     * @param amount The amount of GWT to be pledged
+     */
     function pledgeGwt(uint256 amount) public {
         gwtToken.transferFrom(msg.sender, address(this), amount);
         _supplierInfos[msg.sender].avalibleBalance += amount;
@@ -518,6 +529,10 @@ contract PublicDataStorage is
         );
     }
 
+    /**
+     * @dev Unstake GWT, the avalible pledge GWT can be withdrawn at any time
+     * @param amount The amount of GWT to be withdrawn
+     */
     function unstakeGWT(uint256 amount) public {
         // 如果用户的锁定余额可释放，这里会直接释放掉
         _adjustSupplierBalance(msg.sender);
@@ -650,24 +665,22 @@ contract PublicDataStorage is
         }
     }
 
-    //由于cyclePower的单位是GB，先扩大1024*1024*1000，再进行计算
+    // Since the unit of CyclePower is GB, first expand 1024*1024*1000, and then calculate
     function _getGWTDifficultRatio(uint256 lastCyclePower, uint256 curCyclePower) public pure returns (uint256) {
-        //这个函数本质上，返回的是周利率
-        //1）根据总算力计算基础难度值，算力每次翻倍，基础难度值都会下降 从<= 1PB 开始， 2PB，4PB，8PB，16PB，32PB，64PB，128PB，256PB，512PB .. 都会调整基础难度值
-        // 倍率结果为8x - 1x，当总算力是1PB(GWT)时， 倍率为8x,随后算力每增加一倍，倍率下降10%。 倍率 = 0.9^(log2(总算力/1PB)),每次总算力翻倍，倍率为上一档倍率的90%
-        // 约21次难度调整后会变成1x,此时系统容量已经是 1PB * 2^21 = 2EB
-        //2）根据算力增速x计算基准GWT利率（增发速度），y = f(x),x的值域是从[0,正无穷] y的取值范围最小值是 0.2%, 最大值是 2%
+    // This function is essentially, the weekly interest rate is returned
+    // 1) Calculate the basic difficulty values ​​according to the total power. Each time the computing power doubles, the basic difficulty value will decrease from <= 1pb, 2pb, 4pb, 8pb, 16pb, 32pb, 64pb, 128pb, 256pb, 512pb ..Adjust the foundation difficulty
+    // The multiplier result is 8X -1X. When the total power is 1PB (GWT), the multiplier rate is 8X, and the computing power then doubles, and the magnification decreases by 10%.Multiple rate = 0.9^(log2 (support/1pb)), double the total power each time, the multiplier is 90%
+    // After the difficulty adjustment of about 21 times, it will become 1x. At this time, the system capacity is already 1pb * 2^21 = 2EB
+    // 2) Calculate the benchmark GWT interest rate (increasing speed) according to the computing power growth X, y = f (x), and the value domain of x is from [0, positive infinity] y to be the minimum value of 0.2%, the maximum, the maximum, the maximum, the maximum, the maximumValue is 2%
 
-        //根据上述规则，一周的GWT挖矿比例最大，是抵押总数的  16%（周回报16%）。即矿工在公共数据挖矿中质押了100个GWT，在1周后，能挖出16个GWT，接近6.25周回本
-        //如果早期算力总量低，但没什么人挖，则周回报为 1.6%（周回报1.6%），即矿工在公共数据挖矿中质押了100个GWT，在1周后，能挖出1.6个GWT，接近62.5周回本
-
-        //uint256 base_r = 0.002;
+    // According to the above rules, the largest GWT mining ratio is the largest, 16%of the total mortgage (16%of the weekly return).That is, the miners pledged 100 GWTs in public data mining. After 1 week, they could dig out 16 GWT, which is close to 6.25 weeks.
+    // If the total computing power is low in the early days, but no one digs it, the weekly return is 1.6%(1.6%of the weekly return), that is, the miners pledged 100 GWTs in public data mining.1.6 GWT, close to 62.5 weeks back       //uint256 base_r = 0.002;
         uint256 base_r = 2097152;
         if (curCyclePower == 0) {
             // base_r = 0.01
             base_r = 10485760;
         } else {
-            //给我一个数学函数，满足：y = f(x),x的含义是增长率的值域是从[0,正无穷] y的取值范围最小值是 0.2%, 最大值是 2%。 我希望在x在200%(2倍前）,y能快速的增长到1%
+           // A mathematical function, satisfying: y = f (x), the meaning of X is that the value domain of the growth rate is from [0, positive infinity] Y's value range is 0.2%, and the maximum value is 2%.I hope that before X is 200%(2 times), Y can quickly increase to 1%
             if (curCyclePower > lastCyclePower) {
                 base_r += (8 * (curCyclePower - lastCyclePower) * 1024 * 1024 * 1000) / lastCyclePower;
                 //base_r = 0.002 + (0.008 * (curCyclePower - lastCyclePower)) / lastCyclePower;
@@ -677,7 +690,7 @@ contract PublicDataStorage is
             }
         }
         // 8 * 0.9^(log2((curCyclePower / 1PB)));
-        // curCyclePower的单位是GB
+        // CurcyclePower's units are GB
         int128 exp1 = ABDKMath64x64.fromUInt(curCyclePower).log_2().toInt() - 20;
         if (exp1 < 0) {
             exp1 = 0;
@@ -703,24 +716,22 @@ contract PublicDataStorage is
             publicDataInfo.dataBalance -= reward;
         }
 
-        // 更新本cycle的score
+        // Update the score of this Cycle
         CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
 
-        // 按文件大小比例增加 ， 0.1G - 1G 1分，1G-4G 2分， 4G-8G 3分，8G-16G 4分 16G-32G 5分 ...
+        //Increase according to the proportion of file size ， 0.1G - 1G 1，1G-4G 2， 4G-8G 3，8G-16G 4 16G-32G 5 ...
         uint64 score = _scoreFromHash(dataMixedHash);
         dataInfo.score += score;
 
         //emit DataScoreUpdated(dataMixedHash, _curCycleNumber(), score);
         emit DataPointAdded(dataMixedHash, score);
 
-        // 合约里不关注的数据先不记录了，省gas
-        //publicDataInfo.point += score;
 
-        // 更新cycle的last shower
+        // Update Cycle's Last Shower
         _updateLastSupplier(dataInfo, address(0), msg.sender);
 
-        //只有超过阈值才会更新排名，这个设定会导致用户不多的时候排名不满（强制性累积奖金）
+        //Only exceeding the threshold will update the ranking. This setting will cause the user to be dissatisfied when there are not many users (forced cumulative bonuses)
         if (dataInfo.score > sysConfig.minRankingScore) {
             if (cycleInfo.scoreList.maxlen() < sysConfig.topRewards) {
                 cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
@@ -728,11 +739,12 @@ contract PublicDataStorage is
             cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
         }
 
-        //获得gwt 挖矿奖励
+        
         uint256 lastRecordShowTime = publicDataInfo.show_records[msg.sender];
         if (lastRecordShowTime == 0) {
             publicDataInfo.show_records[msg.sender] = block.timestamp;
         } else {
+            //The second SHOW! Get GWT mining award
             if (block.timestamp - lastRecordShowTime > 1 weeks) {
                 //获得有效算力!
                 // reward = 文件大小* T * 存储质量比率（含质押率） * 公共数据挖矿难度比
@@ -779,6 +791,11 @@ contract PublicDataStorage is
         return _publicDataProofs[proofKey];
     }
 
+    /**
+     * @dev Withdraw the SHOW reward of the data (challenge timeout)
+     * @param dataMixedHash The hash of the data
+     * @param nonce_block The block height of the random number NONCE of this show, the height of this block must be less than the current block height, and within the appropriate time range
+     */
     function withdrawShow(bytes32 dataMixedHash, uint256 nonce_block) public {
         uint256 proofKey = _mergeMixHashAndHeight(
             uint256(dataMixedHash),
@@ -802,6 +819,16 @@ contract PublicDataStorage is
         }
     }
 
+    /**
+     * @dev Show data proof, the data is registerd in the public data contract
+     * @param dataMixedHash The mix_hash of the data
+     * @param nonce_block The block height of the random number NONCE of this show, the height of this block must be less than the current block height, and within the appropriate time range
+     * @param index proof.index
+     * @param m_path proof.merkle_path of
+     * @param leafdata proof.leaf_data
+     * @param showType The type of the show：Immediately or Normal. The immediately mode needs to lock more pledged coins, but it can be understood that the reward is rewarded. The Normal model does not need to lock so many pledged coins, but it needs to be rewarded after the storage challenge is expired.
+     *                 On the network with a high handling fee, we recommend using the right mode immediately. On the network with a lower handling fee, we recommend using the NORMAL mode
+     */
     function showData(
         bytes32 dataMixedHash,
         uint256 nonce_block,
@@ -841,7 +868,7 @@ contract PublicDataStorage is
         );
 
         if (isNewShow) {
-            //根据showType决定锁定金额
+            //Decide The Amount According To ShowType
             PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
             (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
                 supplier,
@@ -860,7 +887,7 @@ contract PublicDataStorage is
                 _onProofSuccess(proof, publicDataInfo, dataMixedHash);
             }
         } else {
-            // 已经有挑战存在：判断是否结果更好，如果更好，更新结果，并更新区块高度
+            // There is already a challenge to exist: judging whether the result is better, if better, update the results, and update the block height
             if (root_hash < proof.proofResult) {
                 _supplierInfos[proof.prover].lockedBalance -= proof
                     .lockedAmount;
@@ -883,6 +910,7 @@ contract PublicDataStorage is
                     _supplierInfos[proof.prover].lockedBalance
                 );
 
+                //Decide The Amount According To ShowType
                 PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
                 (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
                     supplier,
@@ -915,8 +943,13 @@ contract PublicDataStorage is
             );
     }
 
+    /**
+     * @dev Withdraw the reward of the data at special cycle, the reward is calculated according to the ranking of the data in the current cycle
+     * @param cycleNumber The cycle number
+     * @param dataMixedHash The mix_hash of the data
+     */
     function withdrawReward(uint256 cycleNumber, bytes32 dataMixedHash) public {
-        // 判断这次的cycle已经结束
+        // Judging that the cycle of this time has ended
         //require(_currectCycle > cycleNumber, "cycle not finish");
         require(
             block.number > cycleNumber * sysConfig.blocksPerCycle + _startBlock,
@@ -924,31 +957,30 @@ contract PublicDataStorage is
         );
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
-        //REVIEW:一次排序并保存的GAS和32次内存排序的成本问题？
+        //REVIEW:The cost of GAS and 32 memory sorting in one time?
         uint256 scoreListRanking = cycleInfo.scoreList.getRanking(
             dataMixedHash
         );
         require(scoreListRanking > 0, "data not in rank");
 
-        // 无论谁来取，一次性提取所有奖励，并更新积分
+        // No matter who take it, extract all the rewards at one time, and update the points
         require(dataInfo.score > 0, "already withdraw");
 
-        // 计算该得到多少奖励
+        // How many rewards to calculate
         uint256 totalReward = (cycleInfo.totalAward * 8) / 10;
 
         uint8 score = _getRewardScore(scoreListRanking);
-        // 如果数据总量不足32，那么多余的奖励沉淀在合约账户中
+        // If the total amount of data is less than 32, so excess rewards are precipitated in the contract account
         uint256 dataReward = (totalReward * score) / totalRewardScore;
 
-        // memory无法创建动态数组和map，直接算一个转一个了
 
-        // owner
+        // transfoer 20% to owner
         gwtToken.transfer(
             _getDataOwner(dataMixedHash, _publicDatas[dataMixedHash]),
             dataReward / 5
         );
 
-        // sponser
+        // transfoer 50% to sponser
         gwtToken.transfer(_publicDatas[dataMixedHash].sponsor, dataReward / 2);
 
         // last showers
@@ -958,10 +990,10 @@ contract PublicDataStorage is
             gwtToken.transfer(dataInfo.lastShowers[i], showerReward);
         }
 
-        // 设置已取标志
+        // Setting Reward Have Been Taken
         dataInfo.score = 0;
 
-        // 更新积分
+        // Update points
         emit DataPointAdded(dataMixedHash, score);
         emit WithdrawReward(dataMixedHash, cycleNumber);
     }
