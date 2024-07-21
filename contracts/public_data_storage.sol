@@ -55,7 +55,7 @@ contract PublicDataStorage is
         address dataContract;
         uint256 maxDeposit;
         uint256 dataBalance;
-        uint64 depositRatio;
+        uint64 pledgeRate;
         mapping(address => uint256) show_records; //miner address - > last show time
     }
 
@@ -129,6 +129,7 @@ contract PublicDataStorage is
         uint32 createDepositRatio;
         uint64 minRankingScore;
         uint64 minDataSize;
+        uint256 minImmediatelyLockAmount;
     }
 
     SysConfig public sysConfig;
@@ -195,7 +196,8 @@ contract PublicDataStorage is
         sysConfig.maxNonceBlockDistance = 2; // The allowable Nonce Block distance is less than 256
         sysConfig.minRankingScore = 64; // The smallest ranking
         sysConfig.minDataSize = 1 << 27; // When DataSize conversion GWT, the minimum value is 128M
-        sysConfig.createDepositRatio = 5; // Because IMMEDIATE Show is recommended in the early stage, it will be set to 5 times here, so that the top ten shows can be established immediately
+        sysConfig.createDepositRatio = 3; // Because IMMEDIATE Show is recommended in the early stage, it will be set to 5 times here, so that the top ten shows can be established immediately
+        sysConfig.minImmediatelyLockAmount = 210; // The minimum amount of IMMEDIATELY lock
     }
 
 
@@ -406,7 +408,7 @@ contract PublicDataStorage is
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
         require(publicDataInfo.maxDeposit == 0, "public data already exists");
 
-        publicDataInfo.depositRatio = pledgeRate;
+        publicDataInfo.pledgeRate = pledgeRate;
         publicDataInfo.maxDeposit = depositAmount;
         publicDataInfo.sponsor = msg.sender;
         publicDataInfo.dataContract = publicDataContract;
@@ -433,7 +435,7 @@ contract PublicDataStorage is
             info.dataContract,
             info.maxDeposit,
             info.dataBalance,
-            info.depositRatio
+            info.pledgeRate
         );
     }
 
@@ -477,6 +479,12 @@ contract PublicDataStorage is
         return _getDataOwner(dataMixedHash, _publicDatas[dataMixedHash]);
     }
 
+    
+    /**
+     * @dev Adds a deposit to the public data storage,If this recharge exceeds 10%of the maximum recharge amount, the sponser that updates the public data is msg.sender
+     * @param dataMixedHash The hash of the mixed data.
+     * @param depositAmount The amount of the deposit.
+     */
     function addDeposit(bytes32 dataMixedHash, uint256 depositAmount) public {
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
         require(publicDataInfo.maxDeposit > 0, "public data not exist");
@@ -534,7 +542,7 @@ contract PublicDataStorage is
      * @param amount The amount of GWT to be withdrawn
      */
     function unstakeGWT(uint256 amount) public {
-        // 如果用户的锁定余额可释放，这里会直接释放掉
+        // If the user’s lock balance can be released, it will be released directly
         _adjustSupplierBalance(msg.sender);
         SupplierInfo storage supplierInfo = _supplierInfos[msg.sender];
         require(amount <= supplierInfo.avalibleBalance, "insufficient balance");
@@ -552,19 +560,16 @@ contract PublicDataStorage is
         ShowType showType
     ) internal view returns (uint256, bool) {
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 immediatelyLockAmount = (showType == ShowType.Immediately)
-            ? (_publicDatas[dataMixedHash].dataBalance * 2) / 10
-            : 0;
         uint256 normalLockAmount = _dataSizeToGWT(dataSize) *
-            _publicDatas[dataMixedHash].depositRatio *
+            _publicDatas[dataMixedHash].pledgeRate *
             sysConfig.minLockWeeks;
-
-        bool isImmediately = immediatelyLockAmount > normalLockAmount;
-
-        return (
-            isImmediately ? immediatelyLockAmount : normalLockAmount,
-            isImmediately
-        );
+        if(showType == ShowType.Immediately) {
+            uint256 immediatelyLockAmount = (_publicDatas[dataMixedHash].dataBalance * 2) / 10;
+            immediatelyLockAmount < sysConfig.minImmediatelyLockAmount ? sysConfig.minImmediatelyLockAmount : immediatelyLockAmount;
+            return (normalLockAmount + immediatelyLockAmount, true);
+        } else {
+            return (normalLockAmount, false);
+        }
     }
 
     function _LockSupplierPledge(
@@ -769,7 +774,7 @@ contract PublicDataStorage is
                 uint256 lastCyclePower = _cycleInfos[_currectCycle - 2].totalShowPower;
                 uint256 curCyclePower = _cycleInfos[_currectCycle - 1].totalShowPower;
                 // 由于_getGWTDifficultRatio的返回扩大了1024*1024*1000倍，这里要除去
-                uint256 gwtReward = storagePower *publicDataInfo.depositRatio * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
+                uint256 gwtReward = storagePower *publicDataInfo.pledgeRate * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
 
                 //更新奖励，80%给矿工，20%给当前数据的余额
                 gwtToken.mint(msg.sender, gwtReward * 8 / 10);
