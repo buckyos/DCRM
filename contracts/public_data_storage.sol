@@ -15,7 +15,7 @@ import "hardhat/console.sol";
 using SortedScoreList for SortedScoreList.List;
 using ABDKMath64x64 for int128;
 
-//Review:这个作为ERC的一部分，要仔细考虑一下
+//Review: This is a part of ERC, consider it carefully
 interface IERCPublicDataContract {
     //return the owner of the data
     function getDataOwner(bytes32 dataHash) external view returns (address);
@@ -27,18 +27,18 @@ interface IERC721VerifyDataHash{
     function tokenDataHash(uint256 _tokenId) external view returns (bytes32);
 }
 */
-// Review: 考虑有一些链的出块时间不确定,使用区块间隔要谨慎，可以用区块的时间戳
+// Review: Considering that there are some chains of block time uncertain, the block interval should be cautious. You can use the timestamp of the block
 
 // mixedDataHash: 2bit hash algorithm + 62bit data size + 192bit data hash
 // 2bit hash algorithm: 00: keccak256, 01: sha256
 
 /**
- * 有关奖励逻辑：
- * 每个周期的奖励 = 上个周期的奖励 * 0.2 + 这个周期的所有赞助 * 0.2
- * 因此，在每次收入奖励时，更新本周期的奖励额度
- * 当本周期奖励额度为0时，以上个周期的奖励*0.2起始
- * 可能有精度损失？
- */
+* Receive logic:
+* Reward per cycle = reward of the previous cycle * 0.2 + All sponsorship in this cycle * 0.2
+* Therefore, at each income reward, update the reward quota of this cycle
+* When the quota of this cycle is 0, the reward of the above cycle* 0.2 starts
+* Maybe accuracy loss?
+*/
 
 contract PublicDataStorage is
     Initializable,
@@ -75,7 +75,7 @@ contract PublicDataStorage is
         address prover;
         // ShowType showType;
         uint256 lockedAmount;
-    }
+    } 
 
     struct SupplierInfo {
         uint256 avalibleBalance;
@@ -95,16 +95,16 @@ contract PublicDataStorage is
 
     struct CycleDataInfo {
         address[] lastShowers;
-        uint64 score; // score = 0表示已经提现过了
+        uint64 score; //score = 0 means that it has been withdrawn
         uint8 showerIndex;
-        uint64 showCount; //在这个周期里的总show次数，
+        uint64 showCount; //Total show in this cycle,
     }
 
     struct CycleInfo {
         mapping(bytes32 => CycleDataInfo) dataInfos;
         SortedScoreList.List scoreList;
-        uint256 totalAward; // 记录这个cycle的总奖励
-        uint256 totalShowPower; //记录这个cycle的总算力
+        uint256 totalAward; // Record the total reward of this Cycle
+        uint256 totalShowPower; //Record the support of this cycle
     }
 
     struct CycleOutputInfo {
@@ -166,8 +166,6 @@ contract PublicDataStorage is
     event WithdrawReward(bytes32 mixedHash, uint256 cycle);
     event CycleStart(uint256 cycleNumber, uint256 startReward);
 
-    bool isGWT10Enabled;
-
     function initialize(
         address _gwtToken,
         address _Foundation
@@ -188,30 +186,25 @@ contract PublicDataStorage is
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
 
-        // 设置初始参数
-        sysConfig.minDepositRatio = 64; // create data时最小为64倍
-        sysConfig.minPublicDataStorageWeeks = 96; // create data时最小为96周
-        sysConfig.minLockWeeks = 24; // show的时候最小为24周，目前固定为最小值
-        sysConfig.blocksPerCycle = 17280; // 每个cycle为72小时
-        sysConfig.topRewards = 32; // top 32名进榜
-        sysConfig.lockAfterShow = 11520; // show成功后48小时内才能解锁
-        sysConfig.showTimeout = 5760; // show之后24小时允许挑战
-        sysConfig.maxNonceBlockDistance = 2; // 允许的nonce block距离, 要小于256
-        sysConfig.minRankingScore = 64; // 最小的排名分数
-        sysConfig.minDataSize = 1 << 27; // dataSize换算GWT时，最小值为128M
-        sysConfig.createDepositRatio = 5; // 因为初期推荐使用Immediate Show，这里会设置成5倍，可以让前十几个show都可以立即成立
-
-        isGWT10Enabled = false;
+        sysConfig.minDepositRatio = 64; // Create data is the minimum of 64 times
+        sysConfig.minPublicDataStorageWeeks = 96; //Create data is the minimum of 96 weeks
+        sysConfig.minLockWeeks = 24; // sThe minimum is 24 weeks when it is at the current fixed value
+        sysConfig.blocksPerCycle = 17280; // Each cycle is 72 hours
+        sysConfig.topRewards = 32; // TOP 32 entry list
+        sysConfig.lockAfterShow = 11520; // You can unlock it within 48 hours after show
+        sysConfig.showTimeout = 5760; // 4 hours after show, allow challenges
+        sysConfig.maxNonceBlockDistance = 2; // The allowable Nonce Block distance is less than 256
+        sysConfig.minRankingScore = 64; // The smallest ranking
+        sysConfig.minDataSize = 1 << 27; // When DataSize conversion GWT, the minimum value is 128M
+        sysConfig.createDepositRatio = 5; // Because IMMEDIATE Show is recommended in the early stage, it will be set to 5 times here, so that the top ten shows can be established immediately
     }
 
-    function disableGWT10() public onlyOwner {
-        isGWT10Enabled = false;
-    }
 
     function _authorizeUpgrade(
         address newImplementation
     ) internal virtual override onlyOwner {}
 
+    //TODO: need limit?
     function allowPublicDataContract(
         address[] calldata contractAddrs
     ) public onlyOwner {
@@ -228,8 +221,8 @@ contract PublicDataStorage is
         }
     }
 
+    //TODO:Who is eligible to update the key parameters of the system? After testing (after a period of time), SYSCONFIG can be modified
     function setSysConfig(SysConfig calldata config) public onlyOwner {
-        // 这个函数调用频率很低，直接整个set了
         sysConfig = config;
     }
 
