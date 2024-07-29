@@ -34,34 +34,33 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         // The start block of the cycle
         uint256 startBlocktime;
 
-        // the total stake amount of the curent cycle
+        // The total stake amount of the curent cycle
         uint256 totalStaked;
 
-        // the reward info of the cycle       
+        // The reward info of the cycle       
         RewardInfo[] rewards;
     }
 
-    // the total staked amount of the contract of all users
+    // The total staked amount of the contract of all users
     uint256 public totalStaked;
 
-    // the cycle info of the contract
-    //CycleInfo[] public cycles;
+    // The cycle info of the contract, use the cycle index start at 0 as the key
     mapping(uint256 => CycleInfo) public cycles;
 
-    // the staking record of the user
+    // The staking record of the user
     struct StakeRecord {
         uint256 cycleIndex;
         uint256 amount;
     }
     mapping(address => StakeRecord[]) UserStakeRecords;
 
-    // the dividend state of the user
+    // The dividend state of the user, use the keccak256(user, cycleIndex, token) as the key
     mapping(bytes32 => bool) public withdrawDividendState;
 
-    // all the deposit token balance of the contract
+    // All the deposit token balance of the contract
     mapping(address => uint256) public tokenBalances;
 
-    // token white list
+    // Token white list, only the token in the white list can be deposited to the contract use the deposit function
     mapping(address => bool) private tokenWhiteList;
     address[] private tokenWhiteListArray;
 
@@ -209,7 +208,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return tokenBalances[token];
     }
 
-    // deposit token to the current cycle
+    // Deposit token as rewards to the current cycle
     function _depositToken(address token, uint256 amount) internal {
         require(amount > 0, "Cannot deposit 0");
         require(tokenWhiteList[token], "Token not in whitelist");
@@ -229,6 +228,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         rewards.push(RewardInfo(token, amount));
 
+        // Emit the deposit event
         emit Deposit(amount, token);
     }
 
@@ -297,7 +297,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             return 0;
         }
 
-        // print the stake records
+        // Print the stake records
         /*
         console.log("will print stake records for user %s", user);
         for (uint i = 0; i < stakeRecords.length; i++) {
@@ -340,11 +340,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             }
         }
 
-        // update the total staked amount of the contract
+        // Update the total staked amount of the contract
         totalStaked += amount;
-        //TODO: update current cycle's total staked?
 
-        // emit the stake event
+        // Emit the stake event
         emit Stake(msg.sender, amount);
     }
 
@@ -362,12 +361,13 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         
         // console.log("user unstake <=== amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
 
-        // get the last stake record of the user
+        // Get the last stake record of the user
         StakeRecord storage lastStakeRecord = stakeRecords[stakeRecords.length - 1];
         require(lastStakeRecord.amount >= amount, "Insufficient stake amount");
 
-        // 如果存在当前周期的质押操作，那么这个质押操作是可以直接撤销的不影响周期数据(当前质押要在下个周期进入cycleInfo中)
-        // 如果不是当前周期的质押操作，或者当前周期的质押数量不足，那么这个质押操作是需要从上个周期关联的cycleInfo数据中减去的
+        // If there is a stake operation in the current cycle, this stake operation can be directly revoked without affecting the cycle data (the current stake will enter the cycleInfo in the next cycle).
+        // If it is not a stake operation in the current cycle, or the stake amount in the current cycle is insufficient, then this stake operation needs to be subtracted from the cycleInfo data associated with the previous cycle.
+        
         // console.log("unstaking amount %d", amount);
         // console.log("currentCycleIndex %d, lastStakeRecord.cycleIndex %d, amount %d", currentCycleIndex, lastStakeRecord.cycleIndex, lastStakeRecord.amount);
         // console.log("lastStakeRecord.cycleIndex %d", lastStakeRecord.cycleIndex);
@@ -393,13 +393,13 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                 // console.log("prevStakeRecord.cycleIndex %d", prevStakeRecord.cycleIndex);
                 // console.log("prevStakeRecord.totalStaked %d", cycles[prevStakeRecord.cycleIndex].totalStaked);
                 
-                // the last record is unstaked all and is empty, delete it
+                // The last record is unstaked all and is empty, delete it
                 stakeRecords.pop();
 
-                // the prev record all unstaked with the diff amount
+                // The prev record all unstaked with the diff amount
                 prevStakeRecord.amount -= diff;
 
-                // unstake only effect the current cycle's total staked amount
+                // Unstake only effect the current cycle's total staked amount
                 cycles[currentCycleIndex].totalStaked -= diff;
             }
         } else {
@@ -416,9 +416,8 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         emit Unstake(msg.sender, amount);
     }
 
-    // check point for the new cycle
     /**
-     * Check if the new cycle should be started
+     * Check if the new cycle should be started on check point
      * If the current cycle is over the max length, then start a new cycle
      */
     function tryNewCycle() public {
@@ -470,7 +469,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         RewardWithdrawInfo[] memory rewards = new RewardWithdrawInfo[](cycleIndexs.length * tokens.length);
         uint256 realRewardLength = 0;
 
-        // check token white list
+        // Check token white list at first
         for (uint i = 0; i < tokens.length; i++) {
             require(tokenWhiteList[tokens[i]], "Token not in whitelist");
         }
@@ -479,13 +478,12 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             uint256 cycleIndex = cycleIndexs[i];
             require(cycleIndex < currentCycleIndex, "Cannot claim current or future cycle");
 
-            // cycle 0 has no full cycle stake tokens
+            // Cycle 0 is the first cycle and has no full cycle stake tokens, so no rewards
             if (cycleIndex == 0) {
-                // first cycle, no rewards
                 continue;
             }
 
-            // withdraw every token
+            // Withdraw every token in tokens list
             for (uint j = 0; j < tokens.length; j++) {
                 address token = tokens[j];
                 bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
@@ -497,15 +495,16 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                     continue;
                 }
 
-                // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，
-                // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
+
+                // The stake data in stakeRecords for the corresponding cycle results from stake and unstake operations initiated in that cycle.
+                // Therefore, it needs to enter the next cycle to take effect, so we use the data from the previous cycle here.
                 uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
                 // console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
                 if (userStaked == 0) {
                     continue;
                 }
 
-                // find the token reward of the cycle
+                // Find the token reward of the cycle
                 uint256 rewardAmount = 0;
                 for (uint k = 0; k < cycle.rewards.length; k++) {
                     RewardInfo storage reward = cycle.rewards[k];
@@ -522,7 +521,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             }
         }
 
-        // copy the real rewards to new array
+        // Copy the real rewards to new array and return
         RewardWithdrawInfo[] memory realRewards = new RewardWithdrawInfo[](realRewardLength);
         for (uint i = 0; i < realRewardLength; i++) {
             realRewards[i] = rewards[i];
@@ -531,7 +530,6 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return realRewards;
     }
 
-    // claim rewards for the cycle
     /**
      * Withdraw the rewards for the user in the specified cycles
      * User can withdraw the specified token reward for the cycle after the cycle is over and only once
@@ -544,7 +542,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         require(tokens.length > 0, "No token");
         // require(UserStakeRecords[msg.sender].length > 0, "No stake record");
 
-        // display the params
+        // Display the params
         /*
         console.log("will withdraw dividends user %s", msg.sender);
         for (uint i = 0; i < cycleIndexs.length; i++) {
@@ -559,12 +557,12 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
             uint256 cycleIndex = cycleIndexs[i];
             require(cycleIndex < currentCycleIndex, "Cannot claim current or future cycle");
 
-            // cycle 0 has no full cycle stake tokens
+            // Cycle 0 has no full cycle stake tokens and no rewards, so skip
             if (cycleIndex == 0) {
                 continue;
             }
 
-            // withdraw every token
+            // Withdraw every token in tokens list
             for (uint j = 0; j < tokens.length; j++) {
                 address token = tokens[j];
                 bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
@@ -576,15 +574,15 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                     continue;
                 }
 
-                // stakeRecords里面的对应周期的质押数据，都是对应周期发起的操作导致的状态，
-                // 所以需要进入下一个周期才会生效，所以这里使用前一个周期的数据
+                // The stake data in stakeRecords for the corresponding cycle results from stake and unstake operations initiated in that cycle.
+                // Therefore, it needs to enter the next cycle to take effect, so we use the data from the previous cycle here.
                 uint256 userStaked = _getStakeAmount(msg.sender, cycleIndex - 1);
                 // console.log("userStaked %d, cycle %d", userStaked, cycleIndex);
                 if (userStaked == 0) {
                     continue;
                 }
 
-                // find the token reward of the cycle
+                // Find the token reward of the cycle
                 uint256 rewardAmount = 0;
                 for (uint k = 0; k < cycle.rewards.length; k++) {
                     RewardInfo storage reward = cycle.rewards[k];
@@ -597,15 +595,14 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
                 if (rewardAmount > 0) {
                     rewards[realRewardLength++] = RewardInfo(token, rewardAmount);
-                    //rewards.push(RewardInfo(token, rewardAmount));
                 }
 
-                // set the withdraw state of the user and the cycle and the token
+                // Set the withdraw state of the user and the cycle and the token to prevent duplicate withdraw
                 withdrawDividendState[key] = true;
             }
         }
 
-        // do the transfer
+        // Do the transfer for the rewards
         for (uint i = 0; i < realRewardLength; i++) {
             RewardInfo memory reward = rewards[i];
             // console.log("will withdraw transfer %s %s ===> %d", reward.token, msg.sender, reward.amount);
@@ -615,7 +612,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
                 IERC20(reward.token).transfer(msg.sender, reward.amount);
             }
 
-            // then update the token balance
+            // Then update the token balance in the contract
             // console.log("token balance reduced: %s %d ===> %d", reward.token, tokenBalances[reward.token], tokenBalances[reward.token] - reward.amount);
             require(tokenBalances[reward.token] >= reward.amount, "Invalid balance state");
            
