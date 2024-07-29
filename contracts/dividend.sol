@@ -93,14 +93,34 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         cycles[0].startBlocktime = block.timestamp;
     }
 
+    /**
+     * @return the current cycle index, start at 0
+     */
+
     function getCurrentCycleIndex() public view returns (uint256) {
         return currentCycleIndex;
     }
 
+    /**
+     * @return the current cycle info
+     * CycleInfo: {
+     * startBlocktime: uint256, // The start block of the cycle
+     * totalStaked: uint256, // the total stake amount of the curent cycle
+     * rewards: RewardInfo[] // the reward info of the cycle
+     * }
+     * 
+     * RewardInfo: {
+     * token: address, // the token address of the reward
+     * amount: uint256 // the reward amount of the token
+     * }
+     */
     function getCurrentCycle() public view returns (CycleInfo memory) {
         return cycles[currentCycleIndex];
     }
 
+    /**
+     * @return the cycle info list in the range of [startCycle, endCycle]
+     */
     function getCycleInfos(uint256 startCycle, uint256 endCycle) public view returns (CycleInfo[] memory) {
         require(startCycle <= endCycle, "Invalid cycle range");
         require(endCycle <= currentCycleIndex, "Invalid cycle range");
@@ -113,6 +133,11 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return cycleInfos;
     }
 
+    /**
+     * Add the token to the whitelist if it is not in the whitelist
+     * 
+     * @param token the token address for the whitelist
+     */
 
     function addTokenToWhitelist(address token) public onlyOwner {
         if (!tokenWhiteList[token]) {
@@ -123,6 +148,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    /**
+     * Remove the token from the whitelist if it is in the whitelist
+     * @param token the token address for the whitelist
+     */
     function removeTokenFromWhitelist(address token) public onlyOwner {
         if (tokenWhiteList[token]) {
             tokenWhiteList[token] = false;
@@ -139,14 +168,28 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    /** 
+     * Check if the token is in the whitelist
+     * @param token the token address for the whitelist
+     * @return true if the token is in the whitelist, otherwise false
+    */
     function isTokenInWhitelisted(address token) public view returns (bool) {
         return tokenWhiteList[token];
     }
 
+    /**
+     * Get the token whitelist
+     * @return the token whitelist array
+     */
     function getTokenWhitelist() public view returns (address[] memory) {
         return tokenWhiteListArray;
     }
 
+    /**
+     * Get the total staked amount of the specified cycle
+     * @param cycleIndex the cycle index, shoule be less than or equal to the current cycle index
+     * @return the total staked amount of the specified cycle
+     */
     function getTotalStaked(uint256 cycleIndex) public view returns (uint256) {
         if (cycleIndex == currentCycleIndex) {
             return totalStaked;
@@ -157,6 +200,11 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    /**
+     * Get the reward info for the specified token
+     * @param token the reward token address
+     * @return the reward token amount in total
+     */
     function getDepositTokenBalance(address token) public view returns (uint256) {
         return tokenBalances[token];
     }
@@ -184,12 +232,20 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         emit Deposit(amount, token);
     }
 
+    /**
+     * Deposit main token of the chain as reward to the contract
+     */
     receive() external payable {
         tryNewCycle();
 
         _depositToken(address(0), msg.value);
     }
 
+    /**
+     * Deposit token to the contract as reward, must be approved first
+     * @param amount the amount of the token to deposit
+     * @param token the token address to deposit, should not be the staking token or 0 address(main token)
+     */
     function deposit(uint256 amount, address token) external nonReentrant {
         tryNewCycle();
 
@@ -201,6 +257,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         _depositToken(token, amount);
     }
 
+    /**
+     * Update the token balance of the contract if needed, for some case deposit token to the contract directly(not use the deposit function we provided) 
+     * @param token the token address to update the balance
+     */
     function updateTokenBalance(address token) external nonReentrant {
         uint256 balance;
         if (token == address(0)) {
@@ -220,6 +280,11 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    /**
+     * Get the stake token amount of the user in the specified cycle
+     * @param cycleIndex the cycle index, should be less than or equal to the current cycle index
+     * @return the stake amount of the user in the specified cycle
+     */
     function getStakeAmount(uint256 cycleIndex) public view returns (uint256) {
         require(cycleIndex <= currentCycleIndex, "Invalid cycle index");
 
@@ -253,7 +318,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return 0;
     }
 
-    // stake tokens to next cycle
+    /**
+     * Stake the token to the contract, the staked token will be used to calculate the rewards in next cycle
+     * @param amount the amount of the token to stake, should be greater than 0
+     */
     function stake(uint256 amount) external nonReentrant {
         require(amount >0, "Cannot stake 0 DMC");
         require(IERC20(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
@@ -280,8 +348,13 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         emit Stake(msg.sender, amount);
     }
 
-    // withdraw staking tokens from current first and then next cycles
-    // withdraw amount must be less than or equal to the staked amount
+
+    /**
+     * Unstake the token from the contract, the unstaked token will be transfered back to the user
+     * Unstake will first unstake the current cycle's lastest staked amount, if the amount is not enough, then will unstake the previous cycle's staked amount
+     * 
+     * @param amount the amount of the token to unstake, should be greater than 0 and less than or equal to the staked amount of the user
+     */
     function unstake(uint256 amount) external nonReentrant {
         require(amount > 0, "Cannot unstake 0");
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
@@ -344,6 +417,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     // check point for the new cycle
+    /**
+     * Check if the new cycle should be started
+     * If the current cycle is over the max length, then start a new cycle
+     */
     function tryNewCycle() public {
         uint256 currentBlocktime = block.timestamp;
         
@@ -363,13 +440,29 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
     }
 
-    // check if the user has settled the rewards for the cycle
+    /**
+     * Check if the user has settled the rewards for the specified cycle
+     * User can withdraw the rewards for the cycle after the cycle is over and only once
+     * @param cycleIndex the cycle index to check
+     * @param token the token address to check
+     * @return true if the user has settled the rewards for the cycle, otherwise false
+     */
     function isDividendWithdrawed(uint256 cycleIndex, address token) public view returns (bool) {
         bytes32 key = keccak256(abi.encodePacked(msg.sender, cycleIndex, token));
         return withdrawDividendState[key];
     }
 
-    // estimate the rewards for the user
+    /**
+     * Estimate the rewards for the user in the specified cycles
+     * @param cycleIndexs the cycle indexs to estimate
+     * @param tokens the token addresses to estimate
+     * @return the reward withdraw info list
+     * RewardWithdrawInfo: {
+     * token: address, // the token address of the reward
+     * amount: uint256, // the reward amount of the token
+     * withdrawed: bool // the withdraw state of the reward
+     * }
+     */
     function estimateDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external view returns (RewardWithdrawInfo[] memory) {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
@@ -439,6 +532,13 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     // claim rewards for the cycle
+    /**
+     * Withdraw the rewards for the user in the specified cycles
+     * User can withdraw the specified token reward for the cycle after the cycle is over and only once
+     * @param cycleIndexs the cycle indexs to withdraw
+     * @param tokens the token addresses to withdraw if there is any reward for that token
+     */
+
     function withdrawDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external nonReentrant {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
