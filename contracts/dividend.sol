@@ -64,6 +64,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     mapping(address => bool) private tokenWhiteList;
     address[] private tokenWhiteListArray;
 
+    // Lock state for users
+    mapping (address => uint256) lockState;
+    uint256 public lockBlocks;
+    address public proposalContract;
 
     event TokenAddedToWhitelist(address token);
     event TokenRemovedFromWhitelist(address token);
@@ -73,16 +77,19 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
     event Withdraw(address indexed user, address token, uint256 amount);
 
-    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList) public initializer {
+    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockBlocks, address _proposalContract) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
-        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList, _lockBlocks, _proposalContract);
     }
 
-    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList) public onlyInitializing {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockBlocks, address _proposalContract) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
+
+        lockBlocks = _lockBlocks;
+        proposalContract = _proposalContract;
 
         for (uint i = 0; i < _tokenList.length; i++) {
             tokenWhiteList[_tokenList[i]] = true;
@@ -208,6 +215,36 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         return tokenBalances[token];
     }
 
+    function _updateLockState(address user) internal {
+        lockState[user] = block.number;
+    }
+
+    /**
+     * Update the lock state of the user, only the proposal contract can call this function, and return the current stake amount of the user
+     * @param user the user address to check
+     * @return the current stake amount of the user in total
+     */
+    function updateLockState(address user) external returns (uint256) {
+        require(msg.sender == proposalContract, "Only proposal contract can call this function");
+
+        uint256 stakeAmount = _getStakeAmount(user, currentCycleIndex);
+
+        if (stakeAmount > 0) {
+            _updateLockState(user);
+        }
+        
+        return stakeAmount;
+    }
+
+    /**
+     * Get the lock state of the user, use can not unstake if the lock state is true
+     * @param user the user address to check
+     * @return true if the user unstake is locked, otherwise false
+     */
+    function isUserUnstakeLocked(address user) public view returns (bool) {
+        return block.number - lockState[user] <= lockBlocks;
+    }
+
     // Deposit token as rewards to the current cycle
     function _depositToken(address token, uint256 amount) internal {
         require(amount > 0, "Cannot deposit 0");
@@ -328,6 +365,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         // console.log("user stake ===> amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
 
+        // The last stake record of the user is always the newest stake amount of the user in the contract
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         if (stakeRecords.length == 0) {
             stakeRecords.push(StakeRecord(currentCycleIndex, amount));
@@ -342,6 +380,9 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
         // Update the total staked amount of the contract
         totalStaked += amount;
+
+        // Update the lock state of the user
+        _updateLockState(msg.sender);
 
         // Emit the stake event
         emit Stake(msg.sender, amount);
@@ -358,6 +399,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         require(amount > 0, "Cannot unstake 0");
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         require(stakeRecords.length > 0, "No stake record found");
+        require(!isUserUnstakeLocked(msg.sender), "Unstake is locked");
         
         // console.log("user unstake <=== amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
 

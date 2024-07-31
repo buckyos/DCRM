@@ -30,10 +30,12 @@ describe("Devidend", function () {
             "0x0000000000000000000000000000000000000000",
         ];
 
+        const proposalContract = "0x0000000000000000000000000000000000000000";
+
         dividend = (await (
             await upgrades.deployProxy(
                 await ethers.getContractFactory("DividendContract"),
-                [await dmc.getAddress(), 1000, tokenWhiteList]
+                [await dmc.getAddress(), 1000, tokenWhiteList, 500, proposalContract]
             )
         ).waitForDeployment()) as unknown as DividendContract;
 
