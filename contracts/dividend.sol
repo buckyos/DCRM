@@ -100,6 +100,14 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     /**
+     * Update the related proposal contract address, only owner can call this function
+     * @param _proposalContract the new staking token address
+     */
+    function updateProposalContract(address _proposalContract) public onlyOwner {
+        proposalContract = _proposalContract;
+    }
+
+    /**
      * @return the current cycle index, start at 0
      */
 
