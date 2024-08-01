@@ -66,8 +66,8 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     // Lock state for users
     mapping (address => uint256) lockState;
-    uint256 public lockBlocks;
-    address public proposalContract;
+    uint256 public lockPeriod;  // User unstake lock period in seconds
+    address public proposalContract;    // The related proposal contract
 
     event TokenAddedToWhitelist(address token);
     event TokenRemovedFromWhitelist(address token);
@@ -77,18 +77,18 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
     event Withdraw(address indexed user, address token, uint256 amount);
 
-    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockBlocks, address _proposalContract) public initializer {
+    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
-        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList, _lockBlocks, _proposalContract);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList, _lockPeriod, _proposalContract);
     }
 
-    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockBlocks, address _proposalContract) public onlyInitializing {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public onlyInitializing {
         stakingToken = _stakingToken;
         cycleMaxLength = _cycleMaxLength;
 
-        lockBlocks = _lockBlocks;
+        lockPeriod = _lockPeriod;
         proposalContract = _proposalContract;
 
         for (uint i = 0; i < _tokenList.length; i++) {
@@ -216,7 +216,8 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     function _updateLockState(address user) internal {
-        lockState[user] = block.number;
+        // Record the lock time of the user
+        lockState[user] = block.timestamp;
     }
 
     /**
@@ -242,7 +243,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
      * @return true if the user unstake is locked, otherwise false
      */
     function isUserUnstakeLocked(address user) public view returns (bool) {
-        return block.number - lockState[user] <= lockBlocks;
+        return block.timestamp - lockState[user] <= lockPeriod;
     }
 
     // Deposit token as rewards to the current cycle
