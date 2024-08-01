@@ -122,4 +122,8 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
         return votes;
     }
+
+    function getProposalCount() view public returns (uint256) {
+        return curProposalId;
+    }
 }
