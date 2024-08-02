@@ -13,8 +13,8 @@ import "hardhat/console.sol";
 contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, OwnableUpgradeable {
     address public stakingToken;
 
-    // the max length of the cycle in blocks
-    uint256 public cycleMaxLength;
+    // the max length of the cycle in seconds
+    uint256 public cycleMinLength;
     
     // current cycle index, start at 0
     uint256 public currentCycleIndex;
@@ -77,16 +77,16 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     event NewCycle(uint256 cycleIndex, uint256 startBlock);
     event Withdraw(address indexed user, address token, uint256 amount);
 
-    function initialize(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public initializer {
+    function initialize(address _stakingToken, uint256 _cycleMinLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
-        __DividendContractUpgradable_init(_stakingToken, _cycleMaxLength, _tokenList, _lockPeriod, _proposalContract);
+        __DividendContractUpgradable_init(_stakingToken, _cycleMinLength, _tokenList, _lockPeriod, _proposalContract);
     }
 
-    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMaxLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public onlyInitializing {
+    function __DividendContractUpgradable_init(address _stakingToken, uint256 _cycleMinLength, address[] memory _tokenList, uint256 _lockPeriod, address _proposalContract) public onlyInitializing {
         stakingToken = _stakingToken;
-        cycleMaxLength = _cycleMaxLength;
+        cycleMinLength = _cycleMinLength;
 
         lockPeriod = _lockPeriod;
         proposalContract = _proposalContract;
@@ -369,7 +369,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
      * @param amount the amount of the token to stake, should be greater than 0
      */
     function stake(uint256 amount) external nonReentrant {
-        require(amount >0, "Cannot stake 0 DMC");
+        require(amount > 0, "Cannot stake 0 DMC");
         require(IERC20(stakingToken).transferFrom(msg.sender, address(this), amount), "Stake failed");
 
         // console.log("user stake ===> amount %d, cycle %d, user %s", amount, currentCycleIndex, msg.sender);
@@ -475,7 +475,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         uint256 currentBlocktime = block.timestamp;
         
         CycleInfo storage currentCycle = cycles[currentCycleIndex];
-        if (currentBlocktime - currentCycle.startBlocktime >= cycleMaxLength) {
+        if (currentBlocktime - currentCycle.startBlocktime >= cycleMinLength) {
             currentCycleIndex = currentCycleIndex + 1;
             console.log("enter new cycle %d, totalStaked %d", currentCycleIndex, totalStaked);
             CycleInfo storage newCycle = cycles[currentCycleIndex];
