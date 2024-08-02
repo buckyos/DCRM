@@ -100,6 +100,14 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     /**
+     * Update the user stake lock period, only owner can call this function
+     * @param _lockPeriod the new lock period in seconds
+     */
+    function updateLockPeriod(uint256 _lockPeriod) public onlyOwner {
+        lockPeriod = _lockPeriod;
+    }
+
+    /**
      * Update the related proposal contract address, only owner can call this function
      * @param _proposalContract the new staking token address
      */
@@ -251,6 +259,7 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
      * @return true if the user unstake is locked, otherwise false
      */
     function isUserUnstakeLocked(address user) public view returns (bool) {
+        // console.log("lockState[user] %d - block.timestamp %d < lockPeriod %d", lockState[user], block.timestamp, lockPeriod);
         return block.timestamp - lockState[user] <= lockPeriod;
     }
 

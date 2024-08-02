@@ -700,4 +700,32 @@ describe("Devidend", function () {
             );
         }
     });
+
+    it("test stake lock", async () => {
+        // Update the lock period to 5 seconds
+        dividend.connect(signers[0]).updateLockPeriod(5);
+
+        // signers[1] stake 1 DMC
+        await (await dividend.connect(signers[1]).stake(1)).wait();
+
+        // try unstake but will be reverted
+        await expect(dividend.connect(signers[1]).unstake(1)).to.be.revertedWith(
+            "Unstake is locked"
+        );
+        
+        // sleep 3 seconds
+        mine(3, { interval: 1 });
+
+        // try unstake but will be reverted
+        await expect(dividend.connect(signers[1]).unstake(1)).to.be.revertedWith(
+            "Unstake is locked"
+        );
+
+        // sleep 1 seconds and try unstake
+        mine(1, { interval: 1 });
+        await (await dividend.connect(signers[1]).unstake(1)).wait();
+
+        dividend.connect(signers[0]).updateLockPeriod(0);
+        
+    });
 });
