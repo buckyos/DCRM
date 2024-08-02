@@ -18,6 +18,7 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         bool support;
         uint256 amount;
         string desc;
+        uint256 timestamp;
     }
     struct Proposal {
         string title;
@@ -72,6 +73,7 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     }
 
     function supportProposal(uint256 id, string calldata desc) public {
+        require(proposals[id].endtime != 0, "Proposal not exist");
         require(proposals[id].endtime > block.timestamp, "Proposal ended");
         require(proposals[id].voted[msg.sender] == false, "Already voted");
 
@@ -81,12 +83,13 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
         proposals[id].totalSupport += lockedAmount;
         proposals[id].voted[msg.sender] = true;
-        proposals[id].votes.push(VoteInfo(msg.sender, true, lockedAmount, desc));
+        proposals[id].votes.push(VoteInfo(msg.sender, true, lockedAmount, desc, block.timestamp));
 
         emit Vote(id, msg.sender, true, lockedAmount, desc);
     }
 
     function opposeProposal(uint256 id, string calldata desc) public {
+        require(proposals[id].endtime != 0, "Proposal not exist");
         require(proposals[id].endtime > block.timestamp, "Proposal ended");
         require(proposals[id].voted[msg.sender] == false, "Already voted");
 
@@ -96,7 +99,7 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         }
         proposals[id].totalOppose += lockedAmount;
         proposals[id].voted[msg.sender] = true;
-        proposals[id].votes.push(VoteInfo(msg.sender, false, lockedAmount, desc));
+        proposals[id].votes.push(VoteInfo(msg.sender, false, lockedAmount, desc, block.timestamp));
 
         emit Vote(id, msg.sender, false, lockedAmount, desc);
     }
