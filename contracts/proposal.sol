@@ -40,24 +40,28 @@ contract ProposalContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
 
     mapping (uint256 => Proposal) public proposals;
     uint256 curProposalId;
+    uint256 maxDuration;
+    uint256 minStack;
 
     event CreateProposal(uint256 id);
     event Vote(uint256 indexed id, address indexed voter, bool support, uint256 amount, string desc);
 
-    function initialize(address dividendAddress) public initializer {
+    function initialize(address dividendAddress, uint256 _maxDuration, uint256 _minStack) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(msg.sender);
 
         dividendContract = DividendContract(payable(dividendAddress));
+        maxDuration = _maxDuration;
+        minStack = _minStack;
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     function createProposal(string calldata _title, string calldata desc, uint256 duration) public {
-        require(duration <= 3 days, "Duration too long");
+        require(duration <= maxDuration, "Duration too long");
         uint256 lockedAmount = dividendContract.updateLockState(msg.sender);
-        require(lockedAmount >= 50000 ether, "Locked amount not enough");
+        require(lockedAmount >= minStack, "Locked amount not enough");
         uint256 proposalId = ++curProposalId;
 
         proposals[proposalId].title = _title;

@@ -22,7 +22,7 @@ describe("Proposal", function () {
 
         proposal = await upgrades.deployProxy(
             await ethers.getContractFactory("ProposalContract"),
-            [await dividend.getAddress()]) as unknown as ProposalContract;
+            [await dividend.getAddress(), 3*24*60*60, ethers.parseEther("50000")]) as unknown as ProposalContract;
 
         await (await dividend.updateProposalContract(await proposal.getAddress())).wait();
         await (await dmc.transfer(signers[1].address, ethers.parseEther("100000"))).wait();
@@ -60,6 +60,11 @@ describe("Proposal", function () {
 
         // cant unstack because lock time extended
         await expect(dividend.unstake(ethers.parseEther("10000"))).to.be.revertedWith("Unstake is locked");
+
+        // pass 1 day again
+        await mine(2, {interval: 24*60*60})
+        await expect(dividend.unstake(ethers.parseEther("10000"))).to.emit(dividend, "Unstake").withArgs(signers[0].address, ethers.parseEther("10000"));
+
     });
 
     it("vote proposal", async () => {
