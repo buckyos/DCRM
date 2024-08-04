@@ -182,18 +182,18 @@ contract PublicDataStorage is
 
         gwtToken = GWT(_gwtToken);
         _startBlock = block.number;
-        _currectCycle = 0;
+        _currectCycle = 2;
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
 
         sysConfig.minPledgeRate = 64; // Create data is the minimum of 64 times
         sysConfig.minPublicDataStorageWeeks = 96; //Create data is the minimum of 96 weeks
         sysConfig.minLockWeeks = 24; // sThe minimum is 24 weeks when it is at the current fixed value
-        sysConfig.blocksPerCycle = 17280; // Each cycle is 72 hours
+        sysConfig.blocksPerCycle = 86400; // Each cycle is 72 hours
         sysConfig.topRewards = 32; // TOP 32 entry list
-        sysConfig.lockAfterShow = 11520; // You can unlock it within 48 hours after show
-        sysConfig.showTimeout = 5760; // 4 hours after show, allow challenges
-        sysConfig.maxNonceBlockDistance = 2; // The allowable Nonce Block distance is less than 256
+        sysConfig.lockAfterShow = 57600; // You can unlock it within 48 hours after show
+        sysConfig.showTimeout = 4800; // 4 hours after show, allow challenges
+        sysConfig.maxNonceBlockDistance = 10; // The allowable Nonce Block distance is less than 256
         sysConfig.minRankingScore = 64; // The smallest ranking
         sysConfig.minDataSize = 1 << 27; // When DataSize conversion GWT, the minimum value is 128M
         sysConfig.createDepositRatio = 3; // Because IMMEDIATE Show is recommended in the early stage, it will be set to 5 times here, so that the top ten shows can be established immediately
@@ -205,7 +205,6 @@ contract PublicDataStorage is
         address newImplementation
     ) internal virtual override onlyOwner {}
 
-    //TODO: need limit?
     function allowPublicDataContract(
         address[] calldata contractAddrs
     ) public onlyOwner {
@@ -318,7 +317,7 @@ contract PublicDataStorage is
         if (cycleNumber * sysConfig.blocksPerCycle + startBlock < blockNumber) {
             cycleNumber += 1;
         }
-        return cycleNumber;
+        return cycleNumber + 1;
     }
 
     function _curCycleNumber() internal view returns (uint256) {
