@@ -186,9 +186,9 @@ contract PublicDataStorage is
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
 
-        sysConfig.minPledgeRate = 64; // Create data is the minimum of 64 times
+        sysConfig.minPledgeRate = 16; // Create data is the minimum of 16 times
         sysConfig.minPublicDataStorageWeeks = 96; //Create data is the minimum of 96 weeks
-        sysConfig.minLockWeeks = 24; // sThe minimum is 24 weeks when it is at the current fixed value
+        sysConfig.minLockWeeks = 24; // The minimum is 24 weeks when it is at the current fixed value
         sysConfig.blocksPerCycle = 86400; // Each cycle is 72 hours
         sysConfig.topRewards = 32; // TOP 32 entry list
         sysConfig.lockAfterShow = 57600; // You can unlock it within 48 hours after show
@@ -640,6 +640,7 @@ contract PublicDataStorage is
             // 1GB以下算1分
             return 1;
         }
+
         return uint64(size / 4 + 2);
     }
 
@@ -671,14 +672,16 @@ contract PublicDataStorage is
 
     // Since the unit of CyclePower is GB, first expand 1024*1024*1000, and then calculate
     function _getGWTDifficultRatio(uint256 lastCyclePower, uint256 curCyclePower) public pure returns (uint256) {
-    // This function is essentially, the weekly interest rate is returned
-    // 1) Calculate the basic difficulty values ​​according to the total power. Each time the computing power doubles, the basic difficulty value will decrease from <= 1pb, 2pb, 4pb, 8pb, 16pb, 32pb, 64pb, 128pb, 256pb, 512pb ..Adjust the foundation difficulty
-    // The multiplier result is 8X -1X. When the total power is 1PB (GWT), the multiplier rate is 8X, and the computing power then doubles, and the magnification decreases by 10%.Multiple rate = 0.9^(log2 (support/1pb)), double the total power each time, the multiplier is 90%
-    // After the difficulty adjustment of about 21 times, it will become 1x. At this time, the system capacity is already 1pb * 2^21 = 2EB
-    // 2) Calculate the benchmark GWT interest rate (increasing speed) according to the computing power growth X, y = f (x), and the value domain of x is from [0, positive infinity] y to be the minimum value of 0.2%, the maximum, the maximum, the maximum, the maximum, the maximumValue is 2%
+        // This function is essentially, the weekly interest rate is returned
+        // 1) Calculate the basic difficulty values ​​according to the total power. Each time the computing power doubles, the basic difficulty value will decrease from <= 1pb, 2pb, 4pb, 8pb, 16pb, 32pb, 64pb, 128pb, 256pb, 512pb ..Adjust the foundation difficulty
+        // The multiplier result is 8X -1X. When the total power is 1PB (GWT), the multiplier rate is 8X, and the computing power then doubles, and the magnification decreases by 10%.Multiple rate = 0.9^(log2 (support/1pb)), double the total power each time, the multiplier is 90%
+        // After the difficulty adjustment of about 21 times, it will become 1x. At this time, the system capacity is already 1pb * 2^21 = 2EB
+        // 2) Calculate the benchmark GWT interest rate (increasing speed) according to the computing power growth X, y = f (x), and the value domain of x is from [0, positive infinity] y to be the minimum value of 0.2%, the maximum, the maximum, the maximum, the maximum, the maximumValue is 2%
 
-    // According to the above rules, the largest GWT mining ratio is the largest, 16%of the total mortgage (16%of the weekly return).That is, the miners pledged 100 GWTs in public data mining. After 1 week, they could dig out 16 GWT, which is close to 6.25 weeks.
-    // If the total computing power is low in the early days, but no one digs it, the weekly return is 1.6%(1.6%of the weekly return), that is, the miners pledged 100 GWTs in public data mining.1.6 GWT, close to 62.5 weeks back       //uint256 base_r = 0.002;
+        // According to the above rules, the largest GWT mining ratio is the largest, 16%of the total mortgage (16%of the weekly return).That is, the miners pledged 100 GWTs in public data mining. After 1 week, they could dig out 16 GWT, which is close to 6.25 weeks.
+        // If the total computing power is low in the early days, but no one digs it, the weekly return is 1.6%(1.6%of the weekly return), that is, the miners pledged 100 GWTs in public data mining.1.6 GWT, close to 62.5 weeks back       
+            
+        //uint256 base_r = 0.002;
         uint256 base_r = 2097152;
         if (curCyclePower == 0) {
             // base_r = 0.01
@@ -755,8 +758,8 @@ contract PublicDataStorage is
                 // T = 当前时间 - 上次show时间，T必须大于1周，最长为4周
                 publicDataInfo.show_records[msg.sender] = block.timestamp;
                 uint256 storageWeeks = (block.timestamp - lastRecordShowTime) / 1 weeks;
-                if (storageWeeks > 4) {
-                    storageWeeks = 4;
+                if (storageWeeks > 8) {
+                    storageWeeks = 8;
                 }
                 uint256 size = PublicDataProof.lengthFromMixedHash(dataMixedHash) >> 30;
                 if (size == 0) {
@@ -764,16 +767,15 @@ contract PublicDataStorage is
                     size = 1;
                 }
 
-                uint256 storagePower = size * storageWeeks;
-                //更新当前周期的总算力，公共数据的算力是私有数据的3倍
-                cycleInfo.totalShowPower += storagePower * 3;
+                uint256 storagePower = size * storageWeeks * publicDataInfo.pledgeRate * 16;
+                cycleInfo.totalShowPower += storagePower ;
 
                 //计算挖矿奖励，难度和当前算力总量，上一个周期的算力总量有关
                 // 如果_currectCycle是0或者1，这个要怎么算？
                 uint256 lastCyclePower = _cycleInfos[_currectCycle - 2].totalShowPower;
                 uint256 curCyclePower = _cycleInfos[_currectCycle - 1].totalShowPower;
                 // 由于_getGWTDifficultRatio的返回扩大了1024*1024*1000倍，这里要除去
-                uint256 gwtReward = storagePower *publicDataInfo.pledgeRate * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
+                uint256 gwtReward = storagePower * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
 
                 //更新奖励，80%给矿工，20%给当前数据的余额
                 gwtToken.mint(msg.sender, gwtReward * 8 / 10);
@@ -814,7 +816,7 @@ contract PublicDataStorage is
         );
 
         if (block.number - proof.proofBlockHeight > sysConfig.showTimeout) {
-            //Last Show Proof successed! 获得奖励+增加积分
+            //Finally Show Proof successed! Get Show Rewards
             PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
             _onProofSuccess(proof, publicDataInfo, dataMixedHash);
 
@@ -885,7 +887,6 @@ contract PublicDataStorage is
             proof.proofResult = root_hash;
             proof.proofBlockHeight = block.number;
             proof.prover = msg.sender;
-            //proof.showType = showType;
 
             if (isImmediately) {
                 _onProofSuccess(proof, publicDataInfo, dataMixedHash);
@@ -893,8 +894,7 @@ contract PublicDataStorage is
         } else {
             // There is already a challenge to exist: judging whether the result is better, if better, update the results, and update the block height
             if (root_hash < proof.proofResult) {
-                _supplierInfos[proof.prover].lockedBalance -= proof
-                    .lockedAmount;
+                _supplierInfos[proof.prover].lockedBalance -= proof.lockedAmount;
 
                 uint256 rewardFromPunish = (proof.lockedAmount * 8) / 10;
                 gwtToken.transfer(msg.sender, rewardFromPunish);
@@ -923,6 +923,7 @@ contract PublicDataStorage is
                 );
 
                 if (isImmediately) {
+                    //TODO: 挑战成功不增加数据积分，防止自己刷积分
                     _onProofSuccess(proof, publicDataInfo, dataMixedHash);
                 }
 
@@ -930,7 +931,8 @@ contract PublicDataStorage is
                 proof.proofResult = root_hash;
                 proof.proofBlockHeight = block.number;
                 proof.prover = msg.sender;
-                //proof.showType = showType;
+            } else {
+                //TODO challenge failed
             }
         }
 
