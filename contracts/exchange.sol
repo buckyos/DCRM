@@ -209,13 +209,17 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         test_mode = true;
     }
 
-    function enableProdMode() public onlyOwner testEnabled {
+    function enableProdMode(bool isResetRatio) public onlyOwner testEnabled {
         test_mode = false;
 
         // return remaining DMCs to owner, those DMCs comes from owner called addFreeDMCTestMintBalance in test mode.
         DMC(dmcToken).transfer(msg.sender, DMC(dmcToken).balanceOf(address(this)));
 
-        // 如果是首次开启生产模式，初始化第一个周期
+        if (!isResetRatio) {
+            dmc2gwt_rate = test_gwt_ratio;
+        }
+
+        // if its the first time to enable prod mode, we need to init a new cycle
         if (current_circle == 0) {
             _newCycle();
         }
