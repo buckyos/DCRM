@@ -45,6 +45,11 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint256 free_mint_balance;
     mapping(address=>bool) is_free_minted;
 
+    uint256 public test_dmc_balance;
+    uint256 public cycle_start_time;
+    uint256 public cycle_end_time;
+    uint256 public test_gwt_ratio;
+
     event newCycle(uint256 cycle_number, uint256 dmc_balance, uint256 start_time);
     event gwtRateChanged(uint256 new_rate, uint256 old_rate);
     event DMCMinted(address user, uint256 amount, uint256 remain);
@@ -77,13 +82,12 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         initial_dmc_balance = 4817446 ether;
 
         test_mode = true;
-
         //_newCycle();
     }
 
     function getCircleBalance(uint256 circle) public view returns (uint256) {
         //return 210 ether;
-
+        
         uint256 adjust_times = (circle-1) / adjust_period;
         uint256 balance = initial_dmc_balance;
         for (uint i = 0; i < adjust_times; i++) {
@@ -217,18 +221,42 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         }
     }
 
-    function addFreeDMCTestMintBalance(uint256 amount) public onlyOwner testEnabled {
-        require(amount > 0, "amount must be greater than 0");
+    function GWTToDMCForTest(uint256 amount) public testEnabled {
+        require(test_gwt_ratio > 0, "not start test cycle");
 
-        DMC(dmcToken).transferFrom(msg.sender, address(this), amount);
+        uint256 dmc_count = amount / test_gwt_ratio;
+        uint256 real_dmc_amount = dmc_count;
+        if (test_dmc_balance <= dmc_count) {
+            real_dmc_amount = test_dmc_balance;
+            cycle_end_time = block.timestamp;
+        }
+
+        test_dmc_balance -= real_dmc_amount;
+
+        GWT(gwtToken).transferFrom(msg.sender, address(this), real_dmc_amount * 210);
+        DMC(dmcToken).transfer(msg.sender, real_dmc_amount);
     }
 
-    function GWTToDMCForTest(uint256 amount) public testEnabled {
-        require(amount > 0, "ammount must be greater than 0");
-        require(amount % 210 == 0, "ammount must be multiple of 210");
+    function addDMCXForTest(uint256 amount) public testEnabled {
+        DMC(dmcToken).transferFrom(msg.sender, address(this), amount);
+        startNewTestCycle();
+    }
 
-        GWT(gwtToken).transferFrom(msg.sender, address(this), amount);
-        DMC(dmcToken).transfer(msg.sender, amount / 210);
+    function startNewTestCycle() public onlyOwner testEnabled {
+        if (test_gwt_ratio == 0) {  // init
+            test_gwt_ratio = 210;
+        } else if (cycle_end_time > 0) {
+            uint256 gwt_ratio_change = (block.timestamp - cycle_end_time) * 100 / (block.timestamp - cycle_start_time);
+            if (gwt_ratio_change > 20) {
+                gwt_ratio_change = 20;
+            }
+
+            test_gwt_ratio = test_gwt_ratio * (100 + gwt_ratio_change) / 100;
+        }
+
+        cycle_start_time = block.timestamp;
+        cycle_end_time = 0;
+        test_dmc_balance = DMC(dmcToken).balanceOf(address(this));
     }
 
     function GWTtoDMC(uint256 amount) public testDisabled {

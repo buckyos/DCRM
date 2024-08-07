@@ -46,12 +46,29 @@ describe("Exchange", function () {
         await expect(exchange.freeMintGWT()).to.changeTokenBalance(gwt, signers[0], ethers.parseEther("210"));
         await expect(exchange.freeMintGWT()).to.revertedWith("already free minted");
 
-        await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("1"))).wait();
-        await (await exchange.addFreeDMCTestMintBalance(ethers.parseEther("1"))).wait();
+        await (await dmc.transfer(await exchange.getAddress(), ethers.parseEther("1"))).wait();
+        console.log("test change dmc 1");
+        await expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.revertedWith("not start test cycle");
 
-        expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("1"));
+        await (await exchange.startNewTestCycle()).wait();
+        expect(await exchange.test_gwt_ratio()).to.equal(210);
+        expect(await exchange.test_dmc_balance()).to.equal(ethers.parseEther("1"));
+        
+        console.log("test change dmc 2");
+        await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("210"))).wait();
+        await expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("1"));
 
         await expect(exchange.GWTtoDMC(ethers.parseEther("210"))).to.be.revertedWith("contract in test mode");
+
+        await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("10"))).wait();
+        await (await exchange.addDMCXForTest(ethers.parseEther("10"))).wait();
+
+        expect(await exchange.test_gwt_ratio()).to.equal(252);
+        expect(await exchange.test_dmc_balance()).to.equal(ethers.parseEther("10"));
+
+        console.log("test change dmc 3");
+        await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("504"))).wait();
+        await expect(exchange.GWTToDMCForTest(ethers.parseEther("504"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("2"));
     })
 
     it("enable prod mode", async () => {
@@ -67,8 +84,8 @@ describe("Exchange", function () {
         // 兑换DMC到GWT
         await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("1"))).wait();
 
-        // 用1 DMC兑换GWT，能兑换1*210*1.2个
-        await expect(exchange.DMCtoGWT(ethers.parseEther("1"))).to.changeTokenBalance(gwt, signers[0], ethers.parseEther((1*210*1.2).toString()));
+        // 用1 DMC兑换GWT，能兑换1*210*1.1个
+        await expect(exchange.DMCtoGWT(ethers.parseEther("1"))).to.changeTokenBalance(gwt, signers[0], ethers.parseEther("231"));
     });
 
     it("cycle 2", async () => {
