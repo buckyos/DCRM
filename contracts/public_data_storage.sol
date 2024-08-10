@@ -68,8 +68,8 @@ contract PublicDataStorage is
     }
 
     struct DataProof {
-        uint256 nonceBlockHeight;
-        uint256 proofBlockHeight;
+        bytes32 nonceBlockHash;
+        uint256 proofBlockTime;
         bytes32 proofResult;
         address prover;
         // ShowType showType;
@@ -79,7 +79,7 @@ contract PublicDataStorage is
     struct SupplierInfo {
         uint256 avalibleBalance;
         uint256 lockedBalance;
-        uint256 unlockBlock;
+        uint256 unlockTime;
         uint256 lastShowBlock;
     }
 
@@ -104,6 +104,7 @@ contract PublicDataStorage is
         SortedScoreList.List scoreList;
         uint256 totalAward; // Record the total reward of this Cycle
         uint256 totalShowPower; //Record the support of this cycle
+        uint256 cycleStartTime;
     }
 
     struct CycleOutputInfo {
@@ -112,16 +113,14 @@ contract PublicDataStorage is
     }
 
     //cycel nunber => cycle info
-    uint256 _currectCycle;
+    uint256 public currectCycle;
     mapping(uint256 => CycleInfo) _cycleInfos;
-    uint256 _startBlock;
-    uint64 _minRankingScore;
 
     struct SysConfig {
         uint32 minPledgeRate;
         uint32 minPublicDataStorageWeeks;
         uint32 minLockWeeks;
-        uint32 blocksPerCycle;
+        uint32 cycleMinTime;
         uint32 topRewards;
         uint32 lockAfterShow;
         uint32 showTimeout;
@@ -154,7 +153,7 @@ contract PublicDataStorage is
         address oldSponsor,
         address newSponsor
     );
-    // event DataScoreUpdated(bytes32 mixedHash, uint256 cycle, uint64 score);
+   
     event DataPointAdded(bytes32 mixedHash, uint64 point);
     event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
     event SupplierPunished(address supplier, bytes32 mixedHash, uint256 amount);
@@ -181,18 +180,17 @@ contract PublicDataStorage is
         __Ownable_init(msg.sender);
 
         gwtToken = GWT(_gwtToken);
-        _startBlock = block.number;
-        _currectCycle = 2;
+        currectCycle = 2;
         foundationAddress = _Foundation;
         totalRewardScore = 1600;
 
         sysConfig.minPledgeRate = 16; // Create data is the minimum of 16 times
         sysConfig.minPublicDataStorageWeeks = 96; //Create data is the minimum of 96 weeks
         sysConfig.minLockWeeks = 24; // The minimum is 24 weeks when it is at the current fixed value
-        sysConfig.blocksPerCycle = 86400; // Each cycle is 72 hours
+        sysConfig.cycleMinTime = 259200; // Each cycle is 72 hours
         sysConfig.topRewards = 32; // TOP 32 entry list
-        sysConfig.lockAfterShow = 57600; // You can unlock it within 48 hours after show
-        sysConfig.showTimeout = 4800; // 4 hours after show, allow challenges
+        sysConfig.lockAfterShow = 172800; // You can unlock it within 48 hours after show
+        sysConfig.showTimeout = 14400; // 4 hours after show, allow challenges
         sysConfig.maxNonceBlockDistance = 10; // The allowable Nonce Block distance is less than 256
         sysConfig.minRankingScore = 64; // The smallest ranking
         sysConfig.minDataSize = 1 << 27; // When DataSize conversion GWT, the minimum value is 128M
@@ -228,38 +226,10 @@ contract PublicDataStorage is
 
     function _getRewardScore(uint256 ranking) internal pure returns (uint8) {
         uint8[32] memory rewardScores = [
-            240,
-            180,
-            150,
-            120,
-            100,
-            80,
-            60,
-            53,
-            42,
-            36,
-            35,
-            34,
-            33,
-            32,
-            31,
-            30,
-            29,
-            28,
-            27,
-            26,
-            25,
-            24,
-            23,
-            22,
-            21,
-            20,
-            19,
-            18,
-            17,
-            16,
-            15,
-            14
+            240, 180, 150, 120, 100, 80, 60, 53, 
+            42, 36, 35, 34, 33, 32, 31, 30, 
+            29, 28, 27, 26, 25, 24, 23, 22, 
+            21, 20, 19, 18, 17, 16, 15, 14
         ];
         if (ranking <= rewardScores.length) {
             return rewardScores[ranking - 1];
@@ -270,84 +240,37 @@ contract PublicDataStorage is
 
     function _getRemainScore(uint256 length) internal pure returns (uint16) {
         uint16[33] memory remainScores = [
-            1600,
-            1360,
-            1180,
-            1030,
-            910,
-            810,
-            730,
-            670,
-            617,
-            575,
-            539,
-            504,
-            470,
-            437,
-            405,
-            374,
-            344,
-            315,
-            287,
-            260,
-            234,
-            209,
-            185,
-            162,
-            140,
-            119,
-            99,
-            80,
-            62,
-            45,
-            29,
-            14,
-            0
+            1600, 1360, 1180, 1030, 910, 810, 730,
+            670, 617, 575, 539, 504, 470, 437, 405,
+            374, 344, 315, 287, 260, 234, 209, 185,
+            162, 140, 119, 99, 80, 62, 45, 29, 14, 0
         ];
 
         return remainScores[length];
     }
 
-    function _cycleNumber(
-        uint256 blockNumber,
-        uint256 startBlock
-    ) internal view returns (uint256) {
-        uint cycleNumber = (blockNumber - startBlock) /
-            sysConfig.blocksPerCycle;
-        if (cycleNumber * sysConfig.blocksPerCycle + startBlock < blockNumber) {
-            cycleNumber += 1;
-        }
-        return cycleNumber + 1;
-    }
-
-    function _curCycleNumber() internal view returns (uint256) {
-        return _cycleNumber(block.number, _startBlock);
-    }
-
     // By recording a final cycle, there may be empty cycle problems between cycles
     function _ensureCurrentCycleStart() internal returns (CycleInfo storage) {
-        uint256 cycleNumber = _curCycleNumber();
-        CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
-        // If Cycle's reward is 0, it means that this cycle has not yet begun
+        CycleInfo storage curCycleInfo = _cycleInfos[currectCycle];
+        // If currect cycle lasts enough time, it should start a new cycle
         // Start a cycle: 20% from the reward of the previous cycle
-        if (cycleInfo.totalAward == 0) {
-            uint256 lastCycleReward = _cycleInfos[_currectCycle].totalAward;
+        if (block.timestamp - curCycleInfo.cycleStartTime > sysConfig.cycleMinTime) {
+            uint256 lastCycleReward = curCycleInfo.totalAward;
             // 5%as a foundation income
             uint256 fundationIncome = (lastCycleReward * 5) / 100;
             gwtToken.transfer(foundationAddress, fundationIncome);
             // If the last round of the award -winning data is less than 32, the remaining bonuses are also rolled into this round prize pool
-            uint16 remainScore = _getRemainScore(
-                _cycleInfos[_currectCycle].scoreList.length()
-            );
+            uint16 remainScore = _getRemainScore(curCycleInfo.scoreList.length());
             uint256 remainReward = (lastCycleReward * 4 * remainScore) / totalRewardScore / 5;
 
-            cycleInfo.totalAward = lastCycleReward - ((lastCycleReward * 4) / 5) - fundationIncome + remainReward;
-            _currectCycle = cycleNumber;
+            currectCycle += 1;
+            _cycleInfos[currectCycle].cycleStartTime = block.timestamp;
+            _cycleInfos[currectCycle].totalAward = lastCycleReward - ((lastCycleReward * 4) / 5) - fundationIncome + remainReward;
 
-            emit CycleStart(cycleNumber, cycleInfo.totalAward);
+            emit CycleStart(currectCycle, _cycleInfos[currectCycle].totalAward);
         }
 
-        return cycleInfo;
+        return _cycleInfos[currectCycle];
     }
 
     function _addCycleReward(uint256 amount) private {
@@ -442,7 +365,7 @@ contract PublicDataStorage is
         bytes32 dataMixedHash
     ) public view returns (address[] memory) {
         return
-            _cycleInfos[_curCycleNumber()].dataInfos[dataMixedHash].lastShowers;
+            _cycleInfos[currectCycle].dataInfos[dataMixedHash].lastShowers;
     }
 
     function getDataInCycle(
@@ -515,7 +438,7 @@ contract PublicDataStorage is
 
     function _adjustSupplierBalance(address supplier) internal {
         SupplierInfo storage supplierInfo = _supplierInfos[supplier];
-        if (supplierInfo.unlockBlock < block.number) {
+        if (supplierInfo.unlockTime < block.timestamp) {
             supplierInfo.avalibleBalance += supplierInfo.lockedBalance;
             supplierInfo.lockedBalance = 0;
         }
@@ -591,7 +514,7 @@ contract PublicDataStorage is
         );
         supplierInfo.avalibleBalance -= lockAmount;
         supplierInfo.lockedBalance += lockAmount;
-        supplierInfo.unlockBlock = block.number + sysConfig.lockAfterShow;
+        supplierInfo.unlockTime = block.timestamp + sysConfig.lockAfterShow;
         emit SupplierBalanceChanged(
             supplierAddress,
             supplierInfo.avalibleBalance,
@@ -602,16 +525,11 @@ contract PublicDataStorage is
 
     function _verifyDataProof(
         bytes32 dataMixedHash,
-        uint256 nonce_block,
+        bytes32 nonce,
         uint32 index,
         bytes16[] calldata m_path,
         bytes calldata leafdata
     ) private view returns (bytes32, bytes32) {
-        require(nonce_block < block.number, "invalid nonce_block_high");
-        require(block.number - nonce_block < 256, "nonce block too old");
-
-        bytes32 nonce = blockhash(nonce_block);
-
         return
             PublicDataProof.calcDataProof(
                 dataMixedHash,
@@ -637,7 +555,7 @@ contract PublicDataStorage is
     ) public pure returns (uint64) {
         uint256 size = PublicDataProof.lengthFromMixedHash(dataMixedHash) >> 30;
         if (size == 0) {
-            // 1GB以下算1分
+            // if size less than 1GB, we treat it as 1 score
             return 1;
         }
 
@@ -714,7 +632,8 @@ contract PublicDataStorage is
     function _onProofSuccess(
         DataProof storage proof,
         PublicData storage publicDataInfo,
-        bytes32 dataMixedHash
+        bytes32 dataMixedHash,
+        address challengeAddr
     ) private {
         uint256 reward = publicDataInfo.dataBalance / 10;
         emit SupplierReward(proof.prover, dataMixedHash, reward);
@@ -727,25 +646,25 @@ contract PublicDataStorage is
         CycleInfo storage cycleInfo = _ensureCurrentCycleStart();
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
 
-        //Increase according to the proportion of file size ， 0.1G - 1G 1，1G-4G 2， 4G-8G 3，8G-16G 4 16G-32G 5 ...
-        uint64 score = _scoreFromHash(dataMixedHash);
-        dataInfo.score += score;
+        // if not challenge, update the score
+        if (challengeAddr == address(0)) {
+            //Increase according to the proportion of file size ， 0.1G - 1G 1，1G-4G 2， 4G-8G 3，8G-16G 4 16G-32G 5 ...
+            uint64 score = _scoreFromHash(dataMixedHash);
+            dataInfo.score += score;
+            
+            emit DataPointAdded(dataMixedHash, score);
 
-        //emit DataScoreUpdated(dataMixedHash, _curCycleNumber(), score);
-        emit DataPointAdded(dataMixedHash, score);
-
-
-        // Update Cycle's Last Shower
-        _updateLastSupplier(dataInfo, address(0), msg.sender);
-
-        //Only exceeding the threshold will update the ranking. This setting will cause the user to be dissatisfied when there are not many users (forced cumulative bonuses)
-        if (dataInfo.score > sysConfig.minRankingScore) {
-            if (cycleInfo.scoreList.maxlen() < sysConfig.topRewards) {
-                cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
+            //Only exceeding the threshold will update the ranking. This setting will cause the user to be dissatisfied when there are not many users (forced cumulative bonuses)
+            if (dataInfo.score > sysConfig.minRankingScore) {
+                if (cycleInfo.scoreList.maxlen() < sysConfig.topRewards) {
+                    cycleInfo.scoreList.setMaxLen(sysConfig.topRewards);
+                }
+                cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
             }
-            cycleInfo.scoreList.updateScore(dataMixedHash, dataInfo.score);
         }
 
+        // Update Cycle's Last Shower
+        _updateLastSupplier(dataInfo, challengeAddr, msg.sender);
         
         uint256 lastRecordShowTime = publicDataInfo.show_records[msg.sender];
         if (lastRecordShowTime == 0) {
@@ -753,9 +672,9 @@ contract PublicDataStorage is
         } else {
             //The second SHOW! Get GWT mining award
             if (block.timestamp - lastRecordShowTime > 1 weeks) {
-                //获得有效算力!
-                // reward = 文件大小* T * 存储质量比率（含质押率） * 公共数据挖矿难度比
-                // T = 当前时间 - 上次show时间，T必须大于1周，最长为4周
+                // calcute the valid storage power
+                // reward = size * T * pledgeRate * difficultRatio
+                // T = currect time - last show time, T must be greater than 1 week, up to 4 weeks
                 publicDataInfo.show_records[msg.sender] = block.timestamp;
                 uint256 storageWeeks = (block.timestamp - lastRecordShowTime) / 1 weeks;
                 if (storageWeeks > 8) {
@@ -763,27 +682,29 @@ contract PublicDataStorage is
                 }
                 uint256 size = PublicDataProof.lengthFromMixedHash(dataMixedHash) >> 30;
                 if (size == 0) {
-                    // 1GB以下算1G
+                    // if size < 1GB, we treat it as 1GB
                     size = 1;
                 }
 
                 uint256 storagePower = size * storageWeeks * publicDataInfo.pledgeRate * 16;
                 cycleInfo.totalShowPower += storagePower ;
 
-                //计算挖矿奖励，难度和当前算力总量，上一个周期的算力总量有关
-                // 如果_currectCycle是0或者1，这个要怎么算？
-                uint256 lastCyclePower = _cycleInfos[_currectCycle - 2].totalShowPower;
-                uint256 curCyclePower = _cycleInfos[_currectCycle - 1].totalShowPower;
-                // 由于_getGWTDifficultRatio的返回扩大了1024*1024*1000倍，这里要除去
+                // the difficult ratio is calculated by the total power of the current cycle and the total power of the last cycle
+                uint256 lastCyclePower = _cycleInfos[currectCycle - 2].totalShowPower;
+                uint256 curCyclePower = _cycleInfos[currectCycle - 1].totalShowPower;
+                // because the return of _getGWTDifficultRatio is expanded by 1024*1024*1000 times, so here to divide
                 uint256 gwtReward = storagePower * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
 
-                //更新奖励，80%给矿工，20%给当前数据的余额
+                // 80% of the reward is given to the miner, and 20% is given to the current data balance
                 gwtToken.mint(msg.sender, gwtReward * 8 / 10);
-                //TODO:是否需要留一部分挖矿奖励给基金会？目前思考是不需要的
+                
                 gwtToken.mint(address(this), gwtReward * 2 / 10);
                 publicDataInfo.dataBalance += gwtReward * 2 / 10;
             }
         }
+
+        // prevent reentry: repeatedly receive rewards
+        proof.proofBlockTime = 0;
     }
 
     function getDataProof(
@@ -809,20 +730,15 @@ contract PublicDataStorage is
         );
         DataProof storage proof = _publicDataProofs[proofKey];
 
-        require(proof.proofBlockHeight > 0, "proof not exist");
+        require(proof.proofBlockTime > 0, "proof not exist or already withdrawed");
         require(
-            block.number - proof.proofBlockHeight > sysConfig.showTimeout,
+            block.timestamp - proof.proofBlockTime > sysConfig.showTimeout,
             "proof not unlock"
         );
 
-        if (block.number - proof.proofBlockHeight > sysConfig.showTimeout) {
-            //Finally Show Proof successed! Get Show Rewards
-            PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
-            _onProofSuccess(proof, publicDataInfo, dataMixedHash);
-
-            //防止重入：反复领取奖励
-            proof.proofBlockHeight = 0;
-        }
+        // Finally Show Proof successed! Get Show Rewards
+        PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
+        _onProofSuccess(proof, publicDataInfo, dataMixedHash, address(0));
     }
 
     /**
@@ -849,92 +765,65 @@ contract PublicDataStorage is
         );
         DataProof storage proof = _publicDataProofs[proofKey];
 
-        bool isNewShow = false;
-        address supplier = msg.sender;
-
-        if (proof.proofBlockHeight == 0) {
+        if (proof.prover == address(0)) {
+            // a new proof, check params
             require(
                 block.number - nonce_block <= sysConfig.maxNonceBlockDistance,
-                "invalid nonce block"
+                "input nonce block too old"
             );
-            isNewShow = true;
+            require(nonce_block < block.number, "nonce_block too high");
+            require(block.number - nonce_block < 256, "nonce block too old");
+
+            proof.nonceBlockHash = blockhash(nonce_block);
         } else {
-            require(
-                block.number - proof.proofBlockHeight <= sysConfig.showTimeout,
-                "challenge timeout"
-            );
+            // challenge exist proof
+            // if proof not exist, proof.proofBlockTime = 0, block.timestamp always less then sysConfig.showTimeout
+            require(block.timestamp - proof.proofBlockTime <= sysConfig.showTimeout, "challenge timeout");
         }
 
         (bytes32 root_hash, ) = _verifyDataProof(
             dataMixedHash,
-            nonce_block,
+            proof.nonceBlockHash,
             index,
             m_path,
             leafdata
         );
 
-        if (isNewShow) {
-            //Decide The Amount According To ShowType
-            PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
-            (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
-                supplier,
-                dataMixedHash,
-                showType
-            );
-
-            proof.lockedAmount = lockAmount;
-            proof.nonceBlockHeight = nonce_block;
-            proof.proofResult = root_hash;
-            proof.proofBlockHeight = block.number;
-            proof.prover = msg.sender;
-
-            if (isImmediately) {
-                _onProofSuccess(proof, publicDataInfo, dataMixedHash);
-            }
-        } else {
-            // There is already a challenge to exist: judging whether the result is better, if better, update the results, and update the block height
+        if (proof.prover != address(0)) {
             if (root_hash < proof.proofResult) {
                 _supplierInfos[proof.prover].lockedBalance -= proof.lockedAmount;
 
                 uint256 rewardFromPunish = (proof.lockedAmount * 8) / 10;
                 gwtToken.transfer(msg.sender, rewardFromPunish);
-                gwtToken.transfer(
-                    foundationAddress,
-                    proof.lockedAmount - rewardFromPunish
-                );
+                gwtToken.transfer(foundationAddress, proof.lockedAmount - rewardFromPunish);
 
-                emit SupplierPunished(
-                    proof.prover,
-                    dataMixedHash,
-                    proof.lockedAmount
-                );
-                emit SupplierBalanceChanged(
-                    proof.prover,
+                emit SupplierPunished(proof.prover, dataMixedHash, proof.lockedAmount);
+                emit SupplierBalanceChanged(proof.prover,
                     _supplierInfos[proof.prover].avalibleBalance,
                     _supplierInfos[proof.prover].lockedBalance
                 );
-
-                //Decide The Amount According To ShowType
-                PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
-                (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
-                    supplier,
-                    dataMixedHash,
-                    showType
-                );
-
-                if (isImmediately) {
-                    //TODO: 挑战成功不增加数据积分，防止自己刷积分
-                    _onProofSuccess(proof, publicDataInfo, dataMixedHash);
-                }
-
-                proof.lockedAmount = lockAmount;
-                proof.proofResult = root_hash;
-                proof.proofBlockHeight = block.number;
-                proof.prover = msg.sender;
             } else {
-                //TODO challenge failed
+                return;
             }
         }
+
+        // lock supplier pledge
+        // Decide The Amount According To ShowType
+        PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
+        (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
+            msg.sender,
+            dataMixedHash,
+            showType
+        );
+
+        if (isImmediately) {
+            _onProofSuccess(proof, publicDataInfo, dataMixedHash, proof.prover);
+        }
+
+        proof.lockedAmount = lockAmount;
+        proof.proofResult = root_hash;
+        proof.proofBlockTime = block.timestamp;
+        proof.prover = msg.sender;
 
         emit ShowDataProof(msg.sender, dataMixedHash, nonce_block);
     }
@@ -943,10 +832,7 @@ contract PublicDataStorage is
         bytes32 dataMixedHash,
         PublicData storage publicDataInfo
     ) internal view returns (address) {
-        return
-            IERCPublicDataContract(publicDataInfo.dataContract).getDataOwner(
-                dataMixedHash
-            );
+        return IERCPublicDataContract(publicDataInfo.dataContract).getDataOwner(dataMixedHash);
     }
 
     /**
@@ -956,17 +842,11 @@ contract PublicDataStorage is
      */
     function withdrawReward(uint256 cycleNumber, bytes32 dataMixedHash) public {
         // Judging that the cycle of this time has ended
-        //require(_currectCycle > cycleNumber, "cycle not finish");
-        require(
-            block.number > cycleNumber * sysConfig.blocksPerCycle + _startBlock,
-            "cycle not finish"
-        );
+        require(currectCycle > cycleNumber, "cycle not finish");
         CycleInfo storage cycleInfo = _cycleInfos[cycleNumber];
         CycleDataInfo storage dataInfo = cycleInfo.dataInfos[dataMixedHash];
         //REVIEW:The cost of GAS and 32 memory sorting in one time?
-        uint256 scoreListRanking = cycleInfo.scoreList.getRanking(
-            dataMixedHash
-        );
+        uint256 scoreListRanking = cycleInfo.scoreList.getRanking(dataMixedHash);
         require(scoreListRanking > 0, "data not in rank");
 
         // No matter who take it, extract all the rewards at one time, and update the points
