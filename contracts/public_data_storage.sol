@@ -256,7 +256,7 @@ contract PublicDataStorage is
         // Start a cycle: 20% from the reward of the previous cycle
         if (block.timestamp - curCycleInfo.cycleStartTime > sysConfig.cycleMinTime) {
             uint256 lastCycleReward = curCycleInfo.totalAward;
-            // 5%as a foundation income
+            // 5% as a foundation income
             uint256 fundationIncome = (lastCycleReward * 5) / 100;
             gwtToken.transfer(foundationAddress, fundationIncome);
             // If the last round of the award -winning data is less than 32, the remaining bonuses are also rolled into this round prize pool
@@ -791,6 +791,7 @@ contract PublicDataStorage is
 
         if (proof.prover != address(0)) {
             if (root_hash < proof.proofResult) {
+                // challenge success!
                 _supplierInfos[proof.prover].lockedBalance -= proof.lockedAmount;
 
                 uint256 rewardFromPunish = (proof.lockedAmount * 8) / 10;
@@ -803,6 +804,8 @@ contract PublicDataStorage is
                     _supplierInfos[proof.prover].lockedBalance
                 );
             } else {
+                // challenge failed!
+                // TODO: emit event?
                 return;
             }
         }
