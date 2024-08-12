@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 import "./gwt.sol";
 import "./sortedlist.sol";
 import "./PublicDataProof.sol";
+import "./dividend.sol";
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -84,7 +85,7 @@ contract PublicDataStorage is
     }
 
     GWT public gwtToken; // Gb per Week Token
-    address public foundationAddress;
+    DividendContract public dividendContract;
 
     mapping(address => SupplierInfo) _supplierInfos;
     mapping(bytes32 => PublicData) _publicDatas;
@@ -154,34 +155,35 @@ contract PublicDataStorage is
         address newSponsor
     );
    
-    event DataPointAdded(bytes32 mixedHash, uint64 point);
-    event SupplierReward(address supplier, bytes32 mixedHash, uint256 amount);
-    event SupplierPunished(address supplier, bytes32 mixedHash, uint256 amount);
+    event DataPointAdded(bytes32 indexed mixedHash, uint64 point);
+    event SupplierReward(address indexed supplier, bytes32 indexed mixedHash, uint256 amount);
+    event SupplierPunished(address indexed supplier, bytes32 indexed mixedHash, uint256 amount);
     event ShowDataProof(
-        address supplier,
-        bytes32 dataMixedHash,
+        address indexed supplier,
+        bytes32 indexed dataMixedHash,
         uint256 nonce_block
     );
-    event WithdrawReward(bytes32 mixedHash, uint256 cycle);
+    event WithdrawReward(bytes32 indexed mixedHash, uint256 indexed cycle);
     event CycleStart(uint256 cycleNumber, uint256 startReward);
+    event ChallengeFail(address indexed prover, bytes32 indexed dataMixedHash, uint256 nonce_block);
 
     function initialize(
         address _gwtToken,
-        address _Foundation
+        address _dividendContract
     ) public initializer {
-        __PublicDataStorageUpgradable_init(_gwtToken, _Foundation);
+        __PublicDataStorageUpgradable_init(_gwtToken, _dividendContract);
     }
 
     function __PublicDataStorageUpgradable_init(
         address _gwtToken,
-        address _Foundation
+        address _dividendContract
     ) internal onlyInitializing {
         __UUPSUpgradeable_init();
         __Ownable_init(msg.sender);
 
         gwtToken = GWT(_gwtToken);
         currectCycle = 2;
-        foundationAddress = _Foundation;
+        dividendContract = DividendContract(payable(_dividendContract));
         totalRewardScore = 1600;
 
         sysConfig.minPledgeRate = 16; // Create data is the minimum of 16 times
@@ -258,7 +260,11 @@ contract PublicDataStorage is
             uint256 lastCycleReward = curCycleInfo.totalAward;
             // 5% as a foundation income
             uint256 fundationIncome = (lastCycleReward * 5) / 100;
-            gwtToken.transfer(foundationAddress, fundationIncome);
+            
+            // deposit fundation income to dividend contract
+            gwtToken.approve(address(dividendContract), fundationIncome);
+            dividendContract.deposit(fundationIncome, address(gwtToken));
+
             // If the last round of the award -winning data is less than 32, the remaining bonuses are also rolled into this round prize pool
             uint16 remainScore = _getRemainScore(curCycleInfo.scoreList.length());
             uint256 remainReward = (lastCycleReward * 4 * remainScore) / totalRewardScore / 5;
@@ -286,6 +292,10 @@ contract PublicDataStorage is
             fixedDataSize = sysConfig.minDataSize;
         }
         return (uint256(fixedDataSize) * 10 ** 18) >> 30;
+    }
+
+    function minCreateDepositAmount(uint64 dataSize, uint64 pledgeRate) public view returns (uint256) {
+        return pledgeRate * _dataSizeToGWT(dataSize) * sysConfig.minPublicDataStorageWeeks * sysConfig.createDepositRatio;
     }
 
     /**
@@ -321,10 +331,7 @@ contract PublicDataStorage is
         // minamount = data size*gwt exchange ratio*minimum hour length*pledge rate
         // get data size from data hash
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 minAmount = pledgeRate *
-            _dataSizeToGWT(dataSize) *
-            sysConfig.minPublicDataStorageWeeks *
-            sysConfig.createDepositRatio;
+        uint256 minAmount = minCreateDepositAmount(dataSize, pledgeRate);
         require(depositAmount >= minAmount, "deposit amount is too small");
 
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
@@ -477,36 +484,35 @@ contract PublicDataStorage is
         );
     }
 
+    function getLockAmount(uint64 dataSize, ShowType showType, uint64 pledgeRate, uint256 dataBalance) public view returns (uint256) {
+        uint256 normalLockAmount = _dataSizeToGWT(dataSize) * pledgeRate * sysConfig.minLockWeeks;
+        if(showType == ShowType.Immediately) {
+            uint256 immediatelyLockAmount = (dataBalance * 2) / 10;
+            immediatelyLockAmount < sysConfig.minImmediatelyLockAmount ? sysConfig.minImmediatelyLockAmount : immediatelyLockAmount;
+            return normalLockAmount + immediatelyLockAmount;
+        } else {
+            return normalLockAmount;
+        }
+    }
+
     function _getLockAmountByHash(
         bytes32 dataMixedHash,
         ShowType showType
-    ) internal view returns (uint256, bool) {
+    ) internal view returns (uint256) {
         uint64 dataSize = PublicDataProof.lengthFromMixedHash(dataMixedHash);
-        uint256 normalLockAmount = _dataSizeToGWT(dataSize) *
-            _publicDatas[dataMixedHash].pledgeRate *
-            sysConfig.minLockWeeks;
-        if(showType == ShowType.Immediately) {
-            uint256 immediatelyLockAmount = (_publicDatas[dataMixedHash].dataBalance * 2) / 10;
-            immediatelyLockAmount < sysConfig.minImmediatelyLockAmount ? sysConfig.minImmediatelyLockAmount : immediatelyLockAmount;
-            return (normalLockAmount + immediatelyLockAmount, true);
-        } else {
-            return (normalLockAmount, false);
-        }
+        return getLockAmount(dataSize, showType, _publicDatas[dataMixedHash].pledgeRate, _publicDatas[dataMixedHash].dataBalance);
     }
 
     function _LockSupplierPledge(
         address supplierAddress,
         bytes32 dataMixedHash,
         ShowType showType
-    ) internal returns (uint256, bool) {
+    ) internal returns (uint256) {
         _adjustSupplierBalance(supplierAddress);
 
         SupplierInfo storage supplierInfo = _supplierInfos[supplierAddress];
 
-        (uint256 lockAmount, bool isImmediately) = _getLockAmountByHash(
-            dataMixedHash,
-            showType
-        );
+        uint256 lockAmount = _getLockAmountByHash(dataMixedHash, showType);
 
         require(
             supplierInfo.avalibleBalance >= lockAmount,
@@ -520,7 +526,7 @@ contract PublicDataStorage is
             supplierInfo.avalibleBalance,
             supplierInfo.lockedBalance
         );
-        return (lockAmount, isImmediately);
+        return lockAmount;
     }
 
     function _verifyDataProof(
@@ -794,9 +800,13 @@ contract PublicDataStorage is
                 // challenge success!
                 _supplierInfos[proof.prover].lockedBalance -= proof.lockedAmount;
 
+                // send 80% punish income to challenger
                 uint256 rewardFromPunish = (proof.lockedAmount * 8) / 10;
                 gwtToken.transfer(msg.sender, rewardFromPunish);
-                gwtToken.transfer(foundationAddress, proof.lockedAmount - rewardFromPunish);
+
+                // deposit 20% punish income to dividend contract
+                gwtToken.approve(address(dividendContract), proof.lockedAmount - rewardFromPunish);
+                dividendContract.deposit(proof.lockedAmount - rewardFromPunish, address(gwtToken));
 
                 emit SupplierPunished(proof.prover, dataMixedHash, proof.lockedAmount);
                 emit SupplierBalanceChanged(proof.prover,
@@ -805,7 +815,7 @@ contract PublicDataStorage is
                 );
             } else {
                 // challenge failed!
-                // TODO: emit event?
+                emit ChallengeFail(msg.sender, dataMixedHash, nonce_block);
                 return;
             }
         }
@@ -813,13 +823,9 @@ contract PublicDataStorage is
         // lock supplier pledge
         // Decide The Amount According To ShowType
         PublicData storage publicDataInfo = _publicDatas[dataMixedHash];
-        (uint256 lockAmount, bool isImmediately) = _LockSupplierPledge(
-            msg.sender,
-            dataMixedHash,
-            showType
-        );
+        uint256 lockAmount = _LockSupplierPledge(msg.sender,dataMixedHash,showType);
 
-        if (isImmediately) {
+        if (showType == ShowType.Immediately) {
             _onProofSuccess(proof, publicDataInfo, dataMixedHash, proof.prover);
         }
 
