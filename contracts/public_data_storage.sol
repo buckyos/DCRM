@@ -51,13 +51,18 @@ contract PublicDataStorage is
         Immediately
     }
 
+    struct ShowRecord {
+        uint256 showTime;
+        uint256 showCycle;
+    }
+
     struct PublicData {
         address sponsor;
         address dataContract;
         uint256 maxDeposit;
         uint256 dataBalance;
         uint64 pledgeRate;
-        mapping(address => uint256) show_records; //miner address - > last show time
+        mapping(address => ShowRecord) show_records; //miner address - > last show time
     }
 
     struct PublicDataForOutput {
@@ -82,6 +87,7 @@ contract PublicDataStorage is
         uint256 lockedBalance;
         uint256 unlockTime;
         uint256 lastShowBlock;
+        string supplierExtra;
     }
 
     GWT public gwtToken; // Gb per Week Token
@@ -103,9 +109,10 @@ contract PublicDataStorage is
     struct CycleInfo {
         mapping(bytes32 => CycleDataInfo) dataInfos;
         SortedScoreList.List scoreList;
-        uint256 totalAward; // Record the total reward of this Cycle
-        uint256 totalShowPower; //Record the support of this cycle
+        uint256 totalAward;         // Record the total reward of this Cycle
+        uint256 totalShowPower;     //Record the support of this cycle
         uint256 cycleStartTime;
+        uint256 cycleGrowthRate;    // from 5 to 10000, Thousandths
     }
 
     struct CycleOutputInfo {
@@ -182,7 +189,7 @@ contract PublicDataStorage is
         __Ownable_init(msg.sender);
 
         gwtToken = GWT(_gwtToken);
-        currectCycle = 2;
+        currectCycle = 2;   // Start from cycle 2. Cycle 0 and 1 treats as initial cycle, its power should be 0;
         dividendContract = DividendContract(payable(_dividendContract));
         totalRewardScore = 1600;
 
@@ -269,6 +276,20 @@ contract PublicDataStorage is
             uint16 remainScore = _getRemainScore(curCycleInfo.scoreList.length());
             uint256 remainReward = (lastCycleReward * 4 * remainScore) / totalRewardScore / 5;
 
+            // Calculate the GrowthRate of this cycle when the cycle ends
+            uint256 last_power = _cycleInfos[currectCycle - 1].totalShowPower;
+            if (last_power > 0 && curCycleInfo.totalShowPower > last_power*1005/1000) {
+                uint256 growth_rate = (curCycleInfo.totalShowPower - last_power) * 1000 / last_power;
+                if (growth_rate > 10000) {
+                    growth_rate = 10000;
+                }
+
+                curCycleInfo.cycleGrowthRate = growth_rate;
+            } else {
+                curCycleInfo.cycleGrowthRate = 5;
+            }
+
+            // move to next cycle
             currectCycle += 1;
             _cycleInfos[currectCycle].cycleStartTime = block.timestamp;
             _cycleInfos[currectCycle].totalAward = lastCycleReward - ((lastCycleReward * 4) / 5) - fundationIncome + remainReward;
@@ -392,7 +413,7 @@ contract PublicDataStorage is
             );
     }
 
-    function getPledgeInfo(
+    function getSupplierInfo(
         address supplier
     ) public view returns (SupplierInfo memory) {
         return _supplierInfos[supplier];
@@ -408,7 +429,16 @@ contract PublicDataStorage is
         return _getDataOwner(dataMixedHash, _publicDatas[dataMixedHash]);
     }
 
-    
+    function setSupplierExtra(string calldata extra) public {
+        SupplierInfo storage supplierInfo = _supplierInfos[msg.sender];
+        require(supplierInfo.avalibleBalance + supplierInfo.lockedBalance > 0, "MUST pledge first");
+        supplierInfo.supplierExtra = extra;
+    }
+
+    function getSupplierExtra(address supplier) public view returns (string memory) {
+        return _supplierInfos[supplier].supplierExtra;
+    }
+
     /**
      * @dev Adds a deposit to the public data storage,If this recharge exceeds 10%of the maximum recharge amount, the sponser that updates the public data is msg.sender
      * @param dataMixedHash The hash of the mixed data.
@@ -594,8 +624,9 @@ contract PublicDataStorage is
         }
     }
 
-    // Since the unit of CyclePower is GB, first expand 1024*1024*1000, and then calculate
-    function _getGWTDifficultRatio(uint256 lastCyclePower, uint256 curCyclePower) public pure returns (uint256) {
+    // growth_rate is thousandths, 5-10000
+    // also return thousandths.
+    function _getGWTDifficultRatio(uint256 total_size, uint256 growth_rate) public pure returns (uint256) {
         // This function is essentially, the weekly interest rate is returned
         // 1) Calculate the basic difficulty values ​​according to the total power. Each time the computing power doubles, the basic difficulty value will decrease from <= 1pb, 2pb, 4pb, 8pb, 16pb, 32pb, 64pb, 128pb, 256pb, 512pb ..Adjust the foundation difficulty
         // The multiplier result is 8X -1X. When the total power is 1PB (GWT), the multiplier rate is 8X, and the computing power then doubles, and the magnification decreases by 10%.Multiple rate = 0.9^(log2 (support/1pb)), double the total power each time, the multiplier is 90%
@@ -605,34 +636,10 @@ contract PublicDataStorage is
         // According to the above rules, the largest GWT mining ratio is the largest, 16%of the total mortgage (16%of the weekly return).That is, the miners pledged 100 GWTs in public data mining. After 1 week, they could dig out 16 GWT, which is close to 6.25 weeks.
         // If the total computing power is low in the early days, but no one digs it, the weekly return is 1.6%(1.6%of the weekly return), that is, the miners pledged 100 GWTs in public data mining.1.6 GWT, close to 62.5 weeks back       
             
-        //uint256 base_r = 0.002;
-        uint256 base_r = 2097152;
-        if (curCyclePower == 0) {
-            // base_r = 0.01
-            base_r = 10485760;
-        } else {
-           // A mathematical function, satisfying: y = f (x), the meaning of X is that the value domain of the growth rate is from [0, positive infinity] Y's value range is 0.2%, and the maximum value is 2%.I hope that before X is 200%(2 times), Y can quickly increase to 1%
-            if (curCyclePower > lastCyclePower) {
-                base_r += (8 * (curCyclePower - lastCyclePower) * 1024 * 1024 * 1000) / lastCyclePower;
-                //base_r = 0.002 + (0.008 * (curCyclePower - lastCyclePower)) / lastCyclePower;
-                if (base_r > 20971520) {
-                    base_r = 20971520;
-                }
-            }
-        }
-        // 8 * 0.9^(log2((curCyclePower / 1PB)));
-        // CurcyclePower's units are GB
-        int128 exp1 = ABDKMath64x64.fromUInt(curCyclePower).log_2().toInt() - 20;
-        if (exp1 < 0) {
-            exp1 = 0;
-        }
-        uint256 ratio = ABDKMath64x64.divu(9, 10).pow(uint256(int256(exp1))).toUInt() * 8;
-        //uint256 ratio = 8 * ((9/10)^(log2(curCyclePower / 1024 / 1024)));
-        //              = 8 * 0.9^(log2(curCyclePower) - 20)
-        if (ratio < 1) {
-            ratio = 1;
-        }
-        return ratio * base_r;
+        // m = 1024*1024 - 1024*8*growth_rate
+        // result = (0.243*m) / (total_size+0.867*m) + 0.02
+        uint256 m = 1024 * (1024*10000 - 8*growth_rate);
+        return (243*m)*1000 / (total_size*1000 + 867*m) + 20;
     }
 
     function _onProofSuccess(
@@ -672,17 +679,18 @@ contract PublicDataStorage is
         // Update Cycle's Last Shower
         _updateLastSupplier(dataInfo, challengeAddr, msg.sender);
         
-        uint256 lastRecordShowTime = publicDataInfo.show_records[msg.sender];
-        if (lastRecordShowTime == 0) {
-            publicDataInfo.show_records[msg.sender] = block.timestamp;
+        ShowRecord storage lastShowRecord = publicDataInfo.show_records[msg.sender];
+        if (lastShowRecord.showTime == 0) {
+            publicDataInfo.show_records[msg.sender] = ShowRecord(block.timestamp, currectCycle);
         } else {
             //The second SHOW! Get GWT mining award
-            if (block.timestamp - lastRecordShowTime > 1 weeks) {
+            uint256 showDeltaTime = block.timestamp - lastShowRecord.showTime;
+            if (showDeltaTime > 1 weeks) {
                 // calcute the valid storage power
                 // reward = size * T * pledgeRate * difficultRatio
                 // T = currect time - last show time, T must be greater than 1 week, up to 4 weeks
-                publicDataInfo.show_records[msg.sender] = block.timestamp;
-                uint256 storageWeeks = (block.timestamp - lastRecordShowTime) / 1 weeks;
+                publicDataInfo.show_records[msg.sender] = ShowRecord(block.timestamp, currectCycle);
+                uint256 storageWeeks = (showDeltaTime) / 1 weeks;
                 if (storageWeeks > 8) {
                     storageWeeks = 8;
                 }
@@ -696,10 +704,12 @@ contract PublicDataStorage is
                 cycleInfo.totalShowPower += storagePower ;
 
                 // the difficult ratio is calculated by the total power of the current cycle and the total power of the last cycle
-                uint256 lastCyclePower = _cycleInfos[currectCycle - 2].totalShowPower;
-                uint256 curCyclePower = _cycleInfos[currectCycle - 1].totalShowPower;
-                // because the return of _getGWTDifficultRatio is expanded by 1024*1024*1000 times, so here to divide
-                uint256 gwtReward = storagePower * _getGWTDifficultRatio(lastCyclePower, curCyclePower) / 1024 / 1024 / 1000;
+                CycleInfo storage lastShowCycle = _cycleInfos[lastShowRecord.showCycle];
+                CycleInfo storage curCycle = _cycleInfos[currectCycle - 1];
+                uint256 avgShowPower = (lastShowCycle.totalShowPower + curCycle.totalShowPower) / 2;
+                uint256 avgGrowthRate = (lastShowCycle.cycleGrowthRate + curCycle.cycleGrowthRate) / 2;
+                // _getGWTDifficultRatio return thousandths
+                uint256 gwtReward = storagePower * _getGWTDifficultRatio(avgShowPower, avgGrowthRate) * (10 ** 18) / 1000;
 
                 // 80% of the reward is given to the miner, and 20% is given to the current data balance
                 gwtToken.mint(msg.sender, gwtReward * 8 / 10);
