@@ -31,7 +31,7 @@ enum Subcommands {
     Create {
         #[arg(value_name="FILE")]
         file_path: PathBuf,
-        #[arg(value_enum)]
+        #[arg(value_enum, default_value = "keccak256")]
         hash_type: HashType
     },
     Proof {

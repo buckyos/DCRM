@@ -243,12 +243,19 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function addDMCXForTest(uint256 amount) public testEnabled {
         DMC(dmcToken).transferFrom(msg.sender, address(this), amount);
-        startNewTestCycle();
+        _startNewTestCycle();
     }
 
     function startNewTestCycle() public onlyOwner testEnabled {
+        _startNewTestCycle();
+    }
+
+    function _startNewTestCycle() internal {
         if (test_gwt_ratio == 0) {  // init
             test_gwt_ratio = 210;
+
+            cycle_start_time = block.timestamp;
+            cycle_end_time = 0;
         } else if (cycle_end_time > 0) {
             uint256 gwt_ratio_change = (block.timestamp - cycle_end_time) * 100 / (block.timestamp - cycle_start_time);
             if (gwt_ratio_change > 20) {
@@ -256,10 +263,11 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             }
 
             test_gwt_ratio = test_gwt_ratio * (100 + gwt_ratio_change) / 100;
+
+            cycle_start_time = block.timestamp;
+            cycle_end_time = 0;
         }
 
-        cycle_start_time = block.timestamp;
-        cycle_end_time = 0;
         test_dmc_balance = DMC(dmcToken).balanceOf(address(this));
     }
 

@@ -74,9 +74,9 @@ describe("Exchange", function () {
     it("enable prod mode", async () => {
         // 模拟在开启生产模式之前过了很久，超过一个周期的情况
         mine(20, {interval: 1000});
-        await (await exchange.enableProdMode()).wait();
+        await (await exchange.enableProdMode(true)).wait();
 
-        await expect(exchange.enableProdMode()).to.revertedWith("contract not in test mode");
+        await expect(exchange.enableProdMode(true)).to.revertedWith("contract not in test mode");
         await expect(exchange.GWTToDMCForTest(ethers.parseEther("100"))).to.revertedWith("contract not in test mode");
     });
 

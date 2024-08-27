@@ -31,3 +31,7 @@ node_modules
 # solidity-coverage files
 /abi/
 /testDatas/
+/bc1pnca0wnvjaxnq44778th73uwmhpt5cnv7vk853yy7xrpc52jjyljsunmu0c/
+/tb1ptw0xzzhpdw87lpzhugqfjzzjnds8ua5g6c502qsnnfu3f5hdg6vqhm8mcp/
+/proof-tool/target/
+/proof-tool/.idea/
