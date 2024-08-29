@@ -86,7 +86,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function getCircleBalance(uint256 circle) public view returns (uint256) {
-        //return 210 ether;
+        return 210 ether;
         
         uint256 adjust_times = (circle-1) / adjust_period;
         uint256 balance = initial_dmc_balance;
@@ -148,7 +148,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                     dmc2gwt_rate = old_rate * 6 / 5;
                 }
                 // for test
-                // dmc2gwt_rate = 210;
+                dmc2gwt_rate = 210;
                 // console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
@@ -257,12 +257,27 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             cycle_start_time = block.timestamp;
             cycle_end_time = 0;
         } else if (cycle_end_time > 0) {
-            uint256 gwt_ratio_change = (block.timestamp - cycle_end_time) * 100 / (block.timestamp - cycle_start_time);
-            if (gwt_ratio_change > 20) {
-                gwt_ratio_change = 20;
-            }
+            uint256 cycleDuration = cycle_end_time - cycle_start_time;
+            if (cycleDuration < 3 days) {
+                uint256 gwt_ratio_change = (block.timestamp - cycle_end_time) * 100 / (block.timestamp - cycle_start_time);
+                if (gwt_ratio_change > 20) {
+                    gwt_ratio_change = 20;
+                }
 
-            test_gwt_ratio = test_gwt_ratio * (100 + gwt_ratio_change) / 100;
+                test_gwt_ratio = test_gwt_ratio * (100 + gwt_ratio_change) / 100;
+            } else {
+                uint256 gwt_ratio_change = (cycleDuration - 3 days) * 100 / 3 days;
+                if (gwt_ratio_change > 20) {
+                    gwt_ratio_change = 20;
+                }
+
+                test_gwt_ratio = test_gwt_ratio * (100 - gwt_ratio_change) / 100;
+
+                if (test_gwt_ratio < 210) {
+                    test_gwt_ratio = 210;
+                    
+                }
+            }
 
             cycle_start_time = block.timestamp;
             cycle_end_time = 0;

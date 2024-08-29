@@ -47,28 +47,41 @@ describe("Exchange", function () {
         await expect(exchange.freeMintGWT()).to.revertedWith("already free minted");
 
         await (await dmc.transfer(await exchange.getAddress(), ethers.parseEther("1"))).wait();
-        console.log("test change dmc 1");
+        
         await expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.revertedWith("not start test cycle");
 
+        // 开启周期0，汇率210，初始余额1
         await (await exchange.startNewTestCycle()).wait();
         expect(await exchange.test_gwt_ratio()).to.equal(210);
         expect(await exchange.test_dmc_balance()).to.equal(ethers.parseEther("1"));
         
-        console.log("test change dmc 2");
         await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("210"))).wait();
         await expect(exchange.GWTToDMCForTest(ethers.parseEther("210"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("1"));
 
         await expect(exchange.GWTtoDMC(ethers.parseEther("210"))).to.be.revertedWith("contract in test mode");
 
+        // 开启周期1，汇率210*1.2=252，初始余额10
         await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("10"))).wait();
         await (await exchange.addDMCXForTest(ethers.parseEther("10"))).wait();
 
         expect(await exchange.test_gwt_ratio()).to.equal(252);
         expect(await exchange.test_dmc_balance()).to.equal(ethers.parseEther("10"));
 
-        console.log("test change dmc 3");
         await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("504"))).wait();
         await expect(exchange.GWTToDMCForTest(ethers.parseEther("504"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("2"));
+
+        // 等待6天，结束周期1
+        mine(2, {interval: 6*24*60*60});
+        await (await gwt.approve(await exchange.getAddress(), ethers.parseEther("2016"))).wait();
+        await expect(exchange.GWTToDMCForTest(ethers.parseEther("2016"))).to.changeTokenBalance(dmc, signers[0], ethers.parseEther("8"));
+
+        // 开启周期2，汇率应该是252*0.8=201，小于210.改为210.初始余额2
+        await (await dmc.approve(await exchange.getAddress(), ethers.parseEther("2"))).wait();
+        await (await exchange.addDMCXForTest(ethers.parseEther("2"))).wait();
+
+        expect(await exchange.test_gwt_ratio()).to.equal(210);
+        expect(await exchange.test_dmc_balance()).to.equal(ethers.parseEther("2"));
+        
     })
 
     it("enable prod mode", async () => {
