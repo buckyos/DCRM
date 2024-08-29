@@ -1,3 +1,6 @@
+use std::io::Write;
+use std::sync::Arc;
+use bytes::{Bytes};
 use clap::ValueEnum;
 use generic_array::GenericArray;
 use generic_array::typenum::{U16, U32};
@@ -49,36 +52,23 @@ pub struct MerkleTreeData {
 }
 
 pub struct MerkleTree {
-    leaf_hash: Vec<HalfHash>,
     tree: Vec<Vec<HalfHash>>,
     root: Hash,
     hash_type: HashType,
 }
 
-impl MerkleTree {
-    pub fn new(hash_type: HashType) -> Self {
-        MerkleTree {
-            leaf_hash: vec![],
-            tree: vec![],
-            root: Default::default(),
-            hash_type,
-        }
-    }
+pub struct MerkleTreeBuilder {
+    leaf_hash: Vec<HalfHash>,
+    hash_type: HashType,
+}
 
-    pub fn load(data: MerkleTreeData) -> Self {
+type MerkleTreeStable = Arc<MerkleTree>;
+
+impl MerkleTreeBuilder {
+    pub fn new(hash_type: HashType) -> Self {
         Self {
             leaf_hash: vec![],
-            tree: data.tree.iter().map(|v|v.iter().map(|s|decode_half_hash(s)).collect()).collect(),
-            root: decode_hash(&data.root),
-            hash_type: data.hash_type,
-        }
-    }
-
-    pub fn save(&self) -> MerkleTreeData {
-        MerkleTreeData {
-            hash_type: self.hash_type.clone(),
-            tree: self.tree.iter().map(|v|v.iter().map(|h|hex(h.as_slice())).collect()).collect(),
-            root: hex(self.root.as_slice()),
+            hash_type,
         }
     }
 
@@ -87,10 +77,27 @@ impl MerkleTree {
         self.leaf_hash.push(HalfHash::from_slice(&hash32.as_slice()[16..]).clone());
     }
 
-    pub fn calc_tree(&mut self) {
+    pub async fn add_leafs(&mut self, leafs: Vec<Bytes>) {
+        let hash_type = self.hash_type.clone();
+        let mut handles = Vec::new();
+        for leaf in leafs {
+            handles.push(tokio::spawn(async move {
+                let hash_type = hash_type.clone();
+                let hash32 = calc_hash(&hash_type, &leaf);
+                HalfHash::from_slice(&hash32.as_slice()[16..]).clone()
+            }))
+        }
+
+        for handle in handles {
+            self.leaf_hash.push(handle.await.unwrap())
+        }
+    }
+
+    pub fn calc_tree(self, file_size: usize) -> MerkleTree {
+        let mut tree = MerkleTree::new(self.hash_type);
         let mut cur_layer = self.leaf_hash.clone();
         let mut next_layer= Vec::new();
-        self.tree.push(cur_layer.clone());
+        tree.tree.push(cur_layer.clone());
         let mut hash = Hash::default();
         while cur_layer.len() > 1 {
             for chunk in cur_layer.chunks(2) {
@@ -101,12 +108,56 @@ impl MerkleTree {
                     next_layer.push(HalfHash::from_slice(&hash.as_slice()[16..]).clone())
                 }
             }
-            self.tree.push(next_layer.clone());
+            tree.tree.push(next_layer.clone());
             cur_layer = next_layer.clone();
             next_layer.clear();
         }
 
-        self.root = hash;
+        hash.as_mut_slice().write(&file_size.to_be_bytes()).unwrap();
+        hash.as_mut_slice()[0] &= (1 << 6) - 1;
+
+        match self.hash_type {
+            HashType::Sha256 => {
+                // do nothing
+            }
+            HashType::Keccak256 => {
+                hash.as_mut_slice()[0] |= 1 << 7;
+            }
+        }
+
+        tree.root = hash;
+
+        tree
+    }
+}
+
+impl MerkleTree {
+    pub fn new(hash_type: HashType) -> Self {
+        Self {
+            tree: vec![],
+            root: Default::default(),
+            hash_type,
+        }
+    }
+
+    pub fn load(data: MerkleTreeData) -> MerkleTreeStable {
+        Arc::new(Self {
+            tree: data.tree.iter().map(|v|v.iter().map(|s|decode_half_hash(s)).collect()).collect(),
+            root: decode_hash(&data.root),
+            hash_type: data.hash_type,
+        })
+    }
+
+    pub fn save(&self) -> MerkleTreeData {
+        MerkleTreeData {
+            hash_type: self.hash_type.clone(),
+            tree: self.tree.iter().map(|v|v.iter().map(|h|hex(h.as_slice())).collect()).collect(),
+            root: hex(self.root.as_slice()),
+        }
+    }
+
+    pub fn leaf_size(&self) -> usize {
+        self.tree[0].len()
     }
 
     pub fn get_root(&self) -> &Hash {

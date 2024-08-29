@@ -1,11 +1,16 @@
 mod ercmerkle_tree;
 
-use std::env::join_paths;
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::windows::prelude::FileExt;
 use std::path::PathBuf;
+use std::time::Instant;
+use bytes::{Buf, BufMut, BytesMut};
 use clap::{Parser, Subcommand};
-use crate::ercmerkle_tree::{calc_hash, HashType, hex, MerkleTree};
+use flate2::Compression;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
+use crate::ercmerkle_tree::{HashType, hex, MerkleTree, MerkleTreeBuilder};
 
 fn compare_bytes(a: &[u8], b: &[u8]) -> i32 {
     let n = a.len().min(b.len());
@@ -22,6 +27,12 @@ fn compare_bytes(a: &[u8], b: &[u8]) -> i32 {
 
 #[derive(Parser)]
 struct App {
+    #[arg(short, long)]
+    benchmark: bool,
+    #[arg(short, long, default_value = "64")]
+    task_size: u64,
+    #[arg(short, long)]
+    compress: bool,
     #[command(subcommand)]
     command: Subcommands
 }
@@ -38,99 +49,132 @@ enum Subcommands {
         #[arg(value_name="FILE")]
         file_path: PathBuf,
         nonce_hash: String,
-
+        #[arg(help = "only for debug")]
         leaf_index: Option<u64>,
     }
 }
 
-fn main() {
-    let cli = App::parse();
+#[tokio::main]
+async fn main() {
+    let mut cli = App::parse();
+    let mut start = Instant::now();
     match cli.command {
         Subcommands::Create { file_path, hash_type } => {
-            let mut file = std::fs::File::open(&file_path).unwrap();
+            let mut file = File::open(&file_path).unwrap();
             let size = file.metadata().unwrap().len();
-            println!("calcuting merkle tree...");
-            let mut merkle_tree = MerkleTree::new(hash_type);
-            let mut read_buf = Vec::with_capacity(1024);
-            read_buf.resize(1024, 0);
+            println!("calcuting merkle leaf...");
+            let mut merkle_builder = MerkleTreeBuilder::new(hash_type);
             loop {
-                read_buf.fill(0);
+                let mut read_buf = BytesMut::zeroed((1024 * cli.task_size) as usize);
                 let readed = file.read(&mut read_buf).unwrap();
                 if readed == 0 { break; }
-                merkle_tree.add_leaf(&read_buf);
+                let mut bufs = Vec::new();
+
+                let leafs = (readed as f64 / 1024f64).ceil() as usize;
+
+                for _ in 0..leafs {
+                    bufs.push(read_buf.split_to(1024).freeze());
+                }
+
+                merkle_builder.add_leafs(bufs).await;
             }
-            merkle_tree.calc_tree();
-
-            let mut root_hash = merkle_tree.get_root().clone();
-            root_hash.as_mut_slice().write(&size.to_be_bytes()).unwrap();
-            root_hash.as_mut_slice()[0] &= (1 << 6) - 1;
-
-            match hash_type {
-                HashType::Sha256 => {
-                    // do nothing
-                }
-                HashType::Keccak256 => {
-                    root_hash.as_mut_slice()[0] |= 1 << 7;
-                }
+            if cli.benchmark {
+                let dur = Instant::now().duration_since(start).as_secs();
+                println!("calcuting leaf speed: {:.2} MB/sec, total use {dur} secs", (size as f64) / 1024f64 / 1024f64 / (dur as f64));
             }
 
-            merkle_tree.update_root(root_hash);
+            println!("calcuting merkle tree...");
+            start = Instant::now();
+            let tree = merkle_builder.calc_tree(size as usize);
 
-            let merkle_data = merkle_tree.save();
-            std::fs::write(file_path.with_extension("merkle"), &serde_json::to_vec(&merkle_data).unwrap()).unwrap();
+            if cli.benchmark {
+                let dur = Instant::now().duration_since(start).as_secs();
+                let leafs = tree.leaf_size();
+                println!("calcuting tree speed: {:.2} leafs/sec, total use {dur} secs", leafs as f64 / (dur as f64));
+            }
+            println!("save merkle tree...");
+            let mut merkle_data = BytesMut::new().writer();
+            serde_json::to_writer(&mut merkle_data, &tree.save()).unwrap();
+            if cli.compress {
+                let file = File::create(file_path.with_extension("merkle.lzma")).unwrap();
+                let mut encoder = DeflateEncoder::new(file, Compression::default());
+                encoder.write(merkle_data.get_ref()).unwrap();
+                encoder.finish().unwrap().flush().unwrap();
+            } else {
+                std::fs::write(file_path.with_extension("merkle"), merkle_data.get_ref()).unwrap();
+            }
 
-            println!("create file root hash 0x{}", hex::encode(&root_hash));
+            println!("create file root hash 0x{}", hex::encode(tree.get_root()));
+
         }
         Subcommands::Proof { file_path, nonce_hash , leaf_index } => {
-            let merkle_data = serde_json::from_slice(&std::fs::read(file_path.with_extension("merkle")).unwrap()).unwrap();
+            println!("reading merkle tree...");
+            let merkle_data = if cli.compress {
+
+                let mut decoder = DeflateDecoder::new(File::open(file_path.with_extension("merkle")).unwrap());
+                let mut data_buf = Vec::new();
+                decoder.read_to_end(&mut data_buf).unwrap();
+                serde_json::from_slice(&data_buf).unwrap()
+            } else {
+                serde_json::from_slice(&std::fs::read(file_path.with_extension("merkle")).unwrap()).unwrap()
+            };
+
             let merkle_tree = MerkleTree::load(merkle_data);
             let hash = hex::decode(&nonce_hash.as_str()[2..]).unwrap();
 
-            let file = std::fs::File::open(file_path).unwrap();
+            let mut file = File::open(file_path).unwrap();
             let length = file.metadata().unwrap().len();
             let total_leaf_size = (length as f64 / 1024f64).ceil() as u64;
 
             let mut min_root: Option<ercmerkle_tree::Hash> = None;
             let mut min_index = None;
-            
-            let mut read_buf = Vec::with_capacity(1024);
-            read_buf.resize(1024, 0);
+
             if let Some(i) = leaf_index {
-                read_buf.fill(0);
+                let mut read_buf = BytesMut::zeroed(1024);
                 file.seek_read(&mut read_buf, i * 1024).unwrap();
                 let path = merkle_tree.get_path(i);
                 let new_leaf: Vec<u8> = read_buf.iter().chain(hash.iter()).map(|v|*v).collect();
                 let new_root = merkle_tree.proof_by_path(path, i, &new_leaf);
                 //println!("index {} new root {}", i, hex(new_root.as_slice()));
-                if let Some(root) = min_root {
-                    if compare_bytes(new_root.as_slice(), root.as_slice()) < 0 {
-                        min_root.insert(new_root);
-                        min_index.insert(i);
-                    }
-                } else {
-                    min_root.insert(new_root);
-                    min_index.insert(i);
-                }
+                let _ = min_root.insert(new_root);
+                let _ = min_index.insert(i);
             } else {
-                for i in 0..total_leaf_size {
-                    read_buf.fill(0);
-                    file.seek_read(&mut read_buf, i*1024).unwrap();
-                    let path = merkle_tree.get_path(i);
-                    let new_leaf: Vec<u8> = read_buf.iter().chain(hash.iter()).map(|v|*v).collect();
-                    let new_root = merkle_tree.proof_by_path(path, i, &new_leaf);
-                    //println!("index {} new root {}", i, hex(new_root.as_slice()));
-                    if let Some(root) = min_root {
-                        if compare_bytes(new_root.as_slice(), root.as_slice()) < 0 {
-                            min_root.insert(new_root);
-                            min_index.insert(i);
-                        }
-                    } else {
-                        min_root.insert(new_root);
-                        min_index.insert(i);
+                println!("finding min index...");
+                //let mut read_buf = BytesMut::zeroed((1024 * cli.task_size) as usize);
+                let mut i = 0;
+                loop {
+                    let mut read_buf = BytesMut::zeroed((1024 * cli.task_size) as usize);
+                    let readed = file.read(&mut read_buf).unwrap();
+                    if readed == 0 { break; }
+
+                    let mut handles = Vec::new();
+
+                    let leafs = (readed as f64 / 1024f64).ceil() as usize;
+                    for _ in 0..leafs {
+                        let tree = merkle_tree.clone();
+                        let mut buf = read_buf.split_to(1024);
+                        buf.extend_from_slice(&hash);
+                        handles.push(tokio::spawn(async move {
+                            (tree.proof_by_path(tree.get_path(i), i, &buf.freeze()), i)
+                        }));
+                        i += 1;
                     }
+
+                    for handle in handles {
+                        let (new_root, index) = handle.await.unwrap();
+                        if let Some(root) = min_root {
+                            if compare_bytes(new_root.as_slice(), root.as_slice()) < 0 {
+                                let _ = min_root.insert(new_root);
+                                let _ = min_index.insert(index);
+                            }
+                        } else {
+                            let _ = min_root.insert(new_root);
+                            let _ = min_index.insert(index);
+                        }
+                    }
+
                 }
             }
-
 
             println!("found min index {}, min root {}", min_index.unwrap(), hex(min_root.unwrap().as_slice()));
             let paths: Vec<String> = merkle_tree.get_path(min_index.unwrap()).iter().map(|v|hex(v.as_slice())).collect();
@@ -138,7 +182,12 @@ fn main() {
             for path in paths {
                 println!("\t{},", path)
             }
-            println!("]")
+            println!("]");
+
+            if cli.benchmark {
+                let dur = Instant::now().duration_since(start).as_secs();
+                println!("create speed: {:.2} MB/sec, total use {dur} secs", (length as f64) / 1024f64 / 1024f64 / (dur as f64));
+            }
         }
     }
 
