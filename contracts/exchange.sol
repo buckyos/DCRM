@@ -266,7 +266,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
                 test_gwt_ratio = test_gwt_ratio * (100 + gwt_ratio_change) / 100;
             } else {
-                uint256 gwt_ratio_change = (cycleDuration - 3 days) * 100 / 3 days;
+                uint256 gwt_ratio_change = (cycleDuration - 3 days) * 100 / cycleDuration;
                 if (gwt_ratio_change > 20) {
                     gwt_ratio_change = 20;
                 }
@@ -275,7 +275,6 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
                 if (test_gwt_ratio < 210) {
                     test_gwt_ratio = 210;
-                    
                 }
             }
 
