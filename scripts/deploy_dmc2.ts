@@ -7,7 +7,16 @@ GWT address: 0x02F4AAda17e5Bb85d79De9aAC47cC6F3011023e6
 Dividend address: 0x940e289E7a846cE3382D7c5a1b718C8CAcd485ff
 exchange address: 0x6c8069f7C71F8C265C84cA3666Ab6e68f0832199
 PSTBridge address: 0x4ac99EA4CCD7f1743f977583328Bb8BEdfbf1993
+public data storage address: 0xBa99fa0a5a42Ba9f7d528cF6999E173bB8546318
+owned bridge address: 0x4Ad1ee82A3a11D36AB8433e2bCdDab9522b650Dc
+propose contract address: 0x2404cbA43Cd4083D2fd379a1597e9B087cA9Eb52
 */
+/*
+dmc: 0xDa77B359E33b3D4BC6679F6D518dEDaa1C541683
+gwt: 0xFb67DAD4C24bd3645dBE448e6DbECf1fF4D8346f
+exchange: 0x8496769a72E7e6396505d674517b3C2af4179c0A
+ */
+
 
 async function main() {
     let dmc = await (await ethers.deployContract("DMC", [
