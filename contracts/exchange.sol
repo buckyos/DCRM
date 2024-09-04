@@ -86,7 +86,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function getCircleBalance(uint256 circle) public view returns (uint256) {
-        return 210 ether;
+        // return 210 ether;
         
         uint256 adjust_times = (circle-1) / adjust_period;
         uint256 balance = initial_dmc_balance;
@@ -148,7 +148,7 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                     dmc2gwt_rate = old_rate * 6 / 5;
                 }
                 // for test
-                dmc2gwt_rate = 210;
+                // dmc2gwt_rate = 210;
                 // console.log("increase dmc2gwt_rate to %d", dmc2gwt_rate);
             }
 
