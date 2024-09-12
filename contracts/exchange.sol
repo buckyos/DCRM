@@ -243,7 +243,9 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function addDMCXForTest(uint256 amount) public testEnabled {
         DMC(dmcToken).transferFrom(msg.sender, address(this), amount);
-        _startNewTestCycle();
+        if (amount >= 50000 ether) {
+            _startNewTestCycle();
+        }
     }
 
     function startNewTestCycle() public onlyOwner testEnabled {
