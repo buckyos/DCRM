@@ -10,7 +10,8 @@ describe("data tag", function () {
     let tag_hashs: any = {};
     let signers: HardhatEthersSigner[];
     before(async () => {
-        data_tag = await ethers.deployContract("DataTag");
+        //data_tag = await ethers.deployContract("DataTag");
+        data_tag = await upgrades.deployProxy(await ethers.getContractFactory("DataTag"), [], {initializer: "initialize"}) as unknown as DataTag;
         tag_hashs["A"] = await data_tag.calcTagHash(["A"]);
         tag_hashs["B"] = await data_tag.calcTagHash(["A", "B"]);
         tag_hashs["C"] = await data_tag.calcTagHash(["A", "B", "C"]);
@@ -109,18 +110,25 @@ describe("data tag", function () {
     })
 
     it("add data tag", async () => {
+        // signer0给data添加tag D
         let tx = data_tag.addDataTag(DATA_HASH, [tag_hashs["D"]], ["signer0 add tag D"]);
-        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, ethers.ZeroHash, tag_hashs["D"]);
-        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, tag_hashs["D"], signers[0].address, 1);
+        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[0].address, ethers.ZeroHash, tag_hashs["D"]);
+        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, signers[0].address, tag_hashs["D"], signers[0].address, 1);
 
+        // signer1给data添加tag C
         tx = data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["C"]], ["signer1 add tag C"]);
-        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, ethers.ZeroHash, tag_hashs["C"]);
-        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, tag_hashs["C"], signers[1].address, 1);
+        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[1].address, ethers.ZeroHash, tag_hashs["C"]);
+        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, signers[1].address, tag_hashs["C"], signers[1].address, 1);
+
+        // signer1再给data添加tag D
+        await (await data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["D"]], ["signer1 add tag C"])).wait();
     })
 
     it("check data tag", async () => {
-        expect(await data_tag.getDataTags(DATA_HASH)).to.deep.equal([tag_hashs["D"], tag_hashs["C"]]);
-        expect(await data_tag.connect(signers[1]).getDataTagMeta(DATA_HASH, tag_hashs["C"])).to.deep.equal(["signer1 add tag C", 1, 0, 1]);
-        expect(await data_tag.getDataTagMeta(DATA_HASH, tag_hashs["D"])).to.deep.equal(["signer0 add tag D", 1, 0, 1]);
+        expect(await data_tag.getDataTags(DATA_HASH, signers[0].address)).to.deep.equal([tag_hashs["D"]]);
+        expect(await data_tag.getDataTags(DATA_HASH, signers[1].address)).to.deep.equal([tag_hashs["C"], tag_hashs["D"]]);
+
+        expect(await data_tag.connect(signers[1]).getDataTagMeta(DATA_HASH, signers[1].address, tag_hashs["C"])).to.deep.equal(["signer1 add tag C", 1, 0, 1]);
+        expect(await data_tag.getDataTagMeta(DATA_HASH, signers[0].address, tag_hashs["D"])).to.deep.equal(["signer0 add tag D", 1, 0, 1]);
     })
 })

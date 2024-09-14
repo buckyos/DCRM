@@ -1,11 +1,13 @@
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "hardhat/console.sol";
 
-contract DataTag is Ownable {
+contract DataTag is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     // 通用的，包含赞同/反对信息的Meta数据结构。tag和data-tag都会用到这个数据结构
     struct MetaData {
         bool valid;                         // 这个字段通常用在mapping的value，用这个字段表示这个value是否为空
@@ -49,19 +51,25 @@ contract DataTag is Ownable {
         bytes32[] tags;
     }
 
-    mapping(bytes32 => Data) datas;
+    // 每个用户有自己的TAG系统，这里就用dataHash -> address -> tags的三层系统来实现
+    mapping(bytes32 => mapping(address => Data)) datas;
 
     // 更新tag的meta描述，首次更新相当于创建这个tag
     event TagUpdated(bytes32 indexed tagHash, address indexed from);
     // 数据的tag改变。如果是新增tag，oldTag为bytes32(0)
     // oldTag不为空，出现在父TAG被子TAG替换的情况
-    event ReplaceDataTag(bytes32 indexed dataHash, bytes32 indexed oldTag, bytes32 indexed newTag);
+    event ReplaceDataTag(bytes32 indexed dataHash, address indexed tager, bytes32 oldTag, bytes32 newTag);
     // 给tag的meta点赞或反对
     event RateTagMeta(bytes32 indexed tagHash, address indexed from, address indexed rater, int8 like);
-    // 给数据的tag本身点赞或反对
-    event RateDataTag(bytes32 indexed dataHash, bytes32 indexed tag, address indexed rater, int8 like);
+    // 给数据上某个用户附加的tag本身点赞或反对
+    event RateDataTag(bytes32 indexed dataHash, address indexed owner, bytes32 indexed tag, address rater, int8 like);
 
-    constructor() Ownable(msg.sender) {}
+    function initialize() public initializer {
+        __UUPSUpgradeable_init();
+        __Ownable_init(msg.sender);
+    }
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     function calcTagHash(string[] calldata name) pure public returns (bytes32) {
         string memory fullName = "";
@@ -162,16 +170,16 @@ contract DataTag is Ownable {
             bytes32 tagHash = data_tags[i];
             require(bytes(tags[tagHash].name).length != 0, "tag not exist");
             
-            MetaData storage dataTagMeta = datas[dataHash].tag_info[tagHash];
+            MetaData storage dataTagMeta = datas[dataHash][msg.sender].tag_info[tagHash];
 
             if (!dataTagMeta.valid) {
-                datas[dataHash].tags.push(tagHash);
+                datas[dataHash][msg.sender].tags.push(tagHash);
                 dataTagMeta.valid = true;
                 dataTagMeta.meta = data_tag_metas[i];
-                emit ReplaceDataTag(dataHash, bytes32(0), tagHash);
+                emit ReplaceDataTag(dataHash, msg.sender, bytes32(0), tagHash);
             }
 
-            _rateDataTag(dataHash, tagHash, 1);
+            _rateDataTag(dataHash, msg.sender, tagHash, 1);
         }
     }
 
@@ -181,16 +189,16 @@ contract DataTag is Ownable {
      * @param tagHash tag的hash
      * @param like 1代表赞同，-1代表反对，0代表取消之前的评价
      */
-    function rateDataTag(bytes32 dataHash, bytes32 tagHash, int8 like) public {
-        require(datas[dataHash].tag_info[tagHash].valid, "tag not exist");
+    function rateDataTag(bytes32 dataHash, address owner, bytes32 tagHash, int8 like) public {
+        require(datas[dataHash][owner].tag_info[tagHash].valid, "tag not exist");
 
-        _rateDataTag(dataHash, tagHash, like);
+        _rateDataTag(dataHash, owner, tagHash, like);
     }
 
-    function _rateDataTag(bytes32 dataHash, bytes32 tagHash, int8 like) internal {
-        MetaData storage dataTagMeta = datas[dataHash].tag_info[tagHash];
+    function _rateDataTag(bytes32 dataHash, address owner, bytes32 tagHash, int8 like) internal {
+        MetaData storage dataTagMeta = datas[dataHash][owner].tag_info[tagHash];
         if (_rateMeta(dataTagMeta, like)) {
-            emit RateDataTag(dataHash, tagHash, msg.sender, like);
+            emit RateDataTag(dataHash, owner, tagHash, msg.sender, like);
         }
     }
 
@@ -221,14 +229,23 @@ contract DataTag is Ownable {
         return MetaDataOutput(meta.meta, meta.like, meta.dislike, meta.userlike[msg.sender]);
     }
 
-    // 通过dataHash, 查询这个data有哪些tag
-    function getDataTags(bytes32 dataHash) public view returns (bytes32[] memory) {
-        return datas[dataHash].tags;
+    /**
+     * 查询某个用户给某个数据附加了什么TAG
+     * @param dataHash 数据的hash
+     * @param owner 用户地址
+     */
+    function getDataTags(bytes32 dataHash, address owner) public view returns (bytes32[] memory) {
+        return datas[dataHash][owner].tags;
     }
 
-    // 通过dataHash和tagHash，查询tag在这个data上的meta信息
-    function getDataTagMeta(bytes32 dataHash, bytes32 tagHash) public view returns (MetaDataOutput memory) {
-        MetaData storage meta = datas[dataHash].tag_info[tagHash];
+    /**
+     * 查询TAG被附加到这个DATA上时的meta信息
+     * @param dataHash 数据hash
+     * @param owner 给data附加tag的用户地址
+     * @param tagHash tag的hash
+     */
+    function getDataTagMeta(bytes32 dataHash, address owner, bytes32 tagHash) public view returns (MetaDataOutput memory) {
+        MetaData storage meta = datas[dataHash][owner].tag_info[tagHash];
         return MetaDataOutput(meta.meta, meta.like, meta.dislike, meta.userlike[msg.sender]);
     }
 }
