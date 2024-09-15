@@ -79,6 +79,32 @@ contract DataTag is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         return keccak256(abi.encodePacked(fullName));
     }
 
+    function isCharValid(uint8 ele) view internal returns (bool) {
+        uint8[1] memory invalidChars = [47];   // 47是"/"的ASCII码
+
+        for (uint i = 0; i < invalidChars.length; i++) {
+            if (invalidChars[i] == ele) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function isNameValid(string calldata name) view public returns (bool) {
+        bytes memory b = bytes(name);
+        if (b.length == 0) {
+            return false;
+        }
+
+        for (uint i = 0; i < b.length; i++) {
+            if (isCharValid(uint8(b[i]))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * 设置一个tag的描述。设置描述也等于自己对这个描述点赞
      * @param new_tags tag的全路径，比如["a", "b", "c"]表示一个tag的全路径是a/b/c
@@ -88,7 +114,7 @@ contract DataTag is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         bytes32 parent = bytes32(0);
         string memory fullName = "";
         for (uint i = 0; i < new_tags.length; i++) {
-            require(bytes(new_tags[i]).length != 0, "empty name");
+            require(isNameValid(new_tags[i]), "invalid name");
 
             fullName = string.concat(fullName, "/", new_tags[i]);
             bytes32 tagHash = keccak256(abi.encodePacked(fullName));
@@ -157,6 +183,51 @@ contract DataTag is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         _rateTagMeta(tagHash, from, like);
     }
 
+    // check if a is parent of b
+    function isParent(bytes32 a, bytes32 b) public view returns (bool) {
+        if (a == bytes32(0)) {
+            return true;
+        }
+        bytes32 p = tags[b].parent;
+        while (p != bytes32(0)) {
+            if (p == a) {
+                return true;
+            }
+            p = tags[p].parent;
+        }
+        return false;
+    }
+
+    // check if a is child of b
+    // bytes(0)是任何tag的parent，这种处理可能有助于以后tag的删除和数组空位的重新利用
+    function isChild(bytes32 a, bytes32 b) public view returns (bool) {
+        if (b == bytes32(0)) {
+            return true;
+        }
+        uint layers = 0;
+        bytes32 p = tags[a].parent;
+        while (p != bytes32(0)) {
+            p = tags[p].parent;
+            layers++;
+        }
+
+        bytes32[] memory path = new bytes32[](layers);
+        p = tags[a].parent;
+        for (uint i = 0; i < layers; i++) {
+            path[i] = p;
+            p = tags[p].parent;
+        }
+        // path is a`s all parent hash
+
+        // check b is in path
+        for (uint i = 0; i < path.length; i++) {
+            if (path[i] == b) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 给数据附加tag。可以一次性附加多个, 先实现成tag必须存在才能附加
      * @param dataHash 数据的hash
@@ -169,17 +240,33 @@ contract DataTag is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         for (uint i = 0; i < data_tags.length; i++) {
             bytes32 tagHash = data_tags[i];
             require(bytes(tags[tagHash].name).length != 0, "tag not exist");
+
+            // 检查tagHash是否是已存在的某个tag的parent，或者某个tag的child
+            bytes32 oldTag = bytes32(0);
+            for (uint j = 0; j < datas[dataHash][msg.sender].tags.length; j++) {
+                require(!isParent(tagHash, datas[dataHash][msg.sender].tags[j]), "child tag exist");
+
+                if (isChild(tagHash, datas[dataHash][msg.sender].tags[j])) {
+                    oldTag = datas[dataHash][msg.sender].tags[j];
+                    datas[dataHash][msg.sender].tags[j] = tagHash;
+                    break;
+                }
+            }
+
+            if (oldTag == bytes32(0)) {
+                datas[dataHash][msg.sender].tags.push(tagHash);
+            }
             
             MetaData storage dataTagMeta = datas[dataHash][msg.sender].tag_info[tagHash];
 
             if (!dataTagMeta.valid) {
-                datas[dataHash][msg.sender].tags.push(tagHash);
                 dataTagMeta.valid = true;
-                dataTagMeta.meta = data_tag_metas[i];
-                emit ReplaceDataTag(dataHash, msg.sender, bytes32(0), tagHash);
+                _rateDataTag(dataHash, msg.sender, tagHash, 1);
             }
 
-            _rateDataTag(dataHash, msg.sender, tagHash, 1);
+            dataTagMeta.meta = data_tag_metas[i];
+
+            emit ReplaceDataTag(dataHash, msg.sender, oldTag, tagHash);
         }
     }
 

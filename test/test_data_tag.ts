@@ -16,13 +16,18 @@ describe("data tag", function () {
         tag_hashs["B"] = await data_tag.calcTagHash(["A", "B"]);
         tag_hashs["C"] = await data_tag.calcTagHash(["A", "B", "C"]);
         tag_hashs["D"] = await data_tag.calcTagHash(["A", "D"]);
+        console.log(`tag hash /A: ${tag_hashs["A"]}`);
+        console.log(`tag hash /A/B: ${tag_hashs["B"]}`);
+        console.log(`tag hash /A/B/C: ${tag_hashs["C"]}`);
+        console.log(`tag hash /A/D: ${tag_hashs["D"]}`);
 
         signers = await ethers.getSigners();
     })
 
     it("set tag meta", async () => {
-        // 测试错误的空路径
-        await expect(data_tag.setTagMeta(["A", ""], "meta")).to.be.revertedWith("empty name");
+        // 测试错误的tag名称
+        await expect(data_tag.setTagMeta(["A", ""], "meta")).to.be.revertedWith("invalid name");
+        await expect(data_tag.setTagMeta(["A", "B/C"], "meta")).to.be.revertedWith("invalid name");
 
         // 创建路径/A/B/C
         let tx = data_tag.setTagMeta(["A", "B", "C"], "meta_A_B_C");
@@ -110,23 +115,28 @@ describe("data tag", function () {
     })
 
     it("add data tag", async () => {
+        await expect(data_tag.addDataTag(DATA_HASH, [await data_tag.calcTagHash(["A", "B", "E"])], ["signer0 add tag E"])).to.be.revertedWith("tag not exist");
         // signer0给data添加tag D
         let tx = data_tag.addDataTag(DATA_HASH, [tag_hashs["D"]], ["signer0 add tag D"]);
         await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[0].address, ethers.ZeroHash, tag_hashs["D"]);
         await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, signers[0].address, tag_hashs["D"], signers[0].address, 1);
 
-        // signer1给data添加tag C
-        tx = data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["C"]], ["signer1 add tag C"]);
-        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[1].address, ethers.ZeroHash, tag_hashs["C"]);
-        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, signers[1].address, tag_hashs["C"], signers[1].address, 1);
+        // signer1给data添加tag B
+        tx = data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["B"]], ["signer1 add tag B"]);
+        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[1].address, ethers.ZeroHash, tag_hashs["B"]);
+        await expect(tx).to.emit(data_tag, "RateDataTag").withArgs(DATA_HASH, signers[1].address, tag_hashs["B"], signers[1].address, 1);
 
-        // signer1再给data添加tag D
-        await (await data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["D"]], ["signer1 add tag C"])).wait();
+        // signer1给data添加tag A，应该失败
+        await expect(data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["A"]], ["signer1 add tag A"])).to.be.revertedWith("child tag exist");
+
+        // signer1再给data添加tag C，应该成功
+        tx = data_tag.connect(signers[1]).addDataTag(DATA_HASH, [tag_hashs["C"]], ["signer1 add tag C"]);
+        await expect(tx).to.emit(data_tag, "ReplaceDataTag").withArgs(DATA_HASH, signers[1].address, tag_hashs["B"], tag_hashs["C"]);
     })
 
     it("check data tag", async () => {
         expect(await data_tag.getDataTags(DATA_HASH, signers[0].address)).to.deep.equal([tag_hashs["D"]]);
-        expect(await data_tag.getDataTags(DATA_HASH, signers[1].address)).to.deep.equal([tag_hashs["C"], tag_hashs["D"]]);
+        expect(await data_tag.getDataTags(DATA_HASH, signers[1].address)).to.deep.equal([tag_hashs["C"]]);
 
         expect(await data_tag.connect(signers[1]).getDataTagMeta(DATA_HASH, signers[1].address, tag_hashs["C"])).to.deep.equal(["signer1 add tag C", 1, 0, 1]);
         expect(await data_tag.getDataTagMeta(DATA_HASH, signers[0].address, tag_hashs["D"])).to.deep.equal(["signer0 add tag D", 1, 0, 1]);
