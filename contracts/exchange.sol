@@ -201,8 +201,12 @@ contract Exchange is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function DMCtoGWT(uint256 amount) public {
+        uint rate = dmc2gwt_rate;
+        if (test_mode) {
+            rate = test_gwt_ratio;
+        }
         DMC(dmcToken).burnFrom(msg.sender, amount);
-        GWT(gwtToken).mint(msg.sender, amount * dmc2gwt_rate * 11 / 10);
+        GWT(gwtToken).mint(msg.sender, amount * rate * 11 / 10);
     }
 
     function enableTestMode() public onlyOwner testDisabled {
