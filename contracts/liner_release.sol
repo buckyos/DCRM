@@ -29,7 +29,16 @@ contract LinerRelease is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         __Ownable_init(msg.sender);
         lockupId = 0;
     }
-
+    /**
+     * 锁仓amount数量的代币，并从firstReleaseDuration秒后开始释放，直到finalReleaseDuration秒后全部释放完成。释放比例为线性
+     * 调用成功后通过StartLockUp事件返回锁仓id
+     * @param tokenAddr 要锁仓的TOKEN地址，支持所有ERC20标准的代币
+     * @param amount 锁仓的总数
+     * @param to 可以提现的地址
+     * @param firstReleaseDuration 首次释放经过的时间，单位秒。从上链时开始计算。比如输入1000，表示从上链后1000秒开始释放
+     * @param firstReleaseAmount 首次释放的总数
+     * @param finalReleaseDuration 最终释放完成的时间，单位秒
+     */
     function startLock(IERC20 tokenAddr, uint256 amount, address to, uint256 firstReleaseDuration, uint256 firstReleaseAmount, uint256 finalReleaseDuration) public {
         require(finalReleaseDuration >= firstReleaseDuration, "invalid duration");
         tokenAddr.transferFrom(msg.sender, address(this), amount);
@@ -38,6 +47,10 @@ contract LinerRelease is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         emit StartLockUp(lockupId, to);
     }
 
+    /**
+     * 从特定的锁仓行为中提取代币，只能是to地址调用
+     * @param lockupId 锁仓id
+     */
     function withdraw(uint256 lockupId) public {
         LockupInfo storage lockupInfo = lockupInfos[lockupId];
         require(lockupInfo.to == msg.sender, "invalid receiver");

@@ -69,6 +69,9 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     uint256 public lockPeriod;  // User unstake lock period in seconds
     address public proposalContract;    // The related proposal contract
 
+    // address blacklist
+    mapping (address => bool) blacklist;
+
     event TokenAddedToWhitelist(address token);
     event TokenRemovedFromWhitelist(address token);
     event Deposit(uint256 amount, address token);
@@ -113,6 +116,18 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
      */
     function updateProposalContract(address _proposalContract) public onlyOwner {
         proposalContract = _proposalContract;
+    }
+
+    function addBlacklist(address user) public onlyOwner {
+        blacklist[user] = true;
+    }
+
+    function removeBlacklist(address user) public onlyOwner {
+        blacklist[user] = false;
+    }
+
+    function isBlackListed(address user) public view returns (bool) {
+        return blacklist[user];
     }
 
     /**
@@ -414,6 +429,9 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
      * @param amount the amount of the token to unstake, should be greater than 0 and less than or equal to the staked amount of the user
      */
     function unstake(uint256 amount) external nonReentrant {
+        // blacklisted address cannot unstake
+        require(!isBlackListed(msg.sender), "Blacklisted address");
+
         require(amount > 0, "Cannot unstake 0");
         StakeRecord[] storage stakeRecords = UserStakeRecords[msg.sender];
         require(stakeRecords.length > 0, "No stake record found");
@@ -525,6 +543,9 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     function estimateDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external view returns (RewardWithdrawInfo[] memory) {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
+
+        // blacklisted address cannot estimate
+        require(!isBlackListed(msg.sender), "Blacklisted address");
 
         RewardWithdrawInfo[] memory rewards = new RewardWithdrawInfo[](cycleIndexs.length * tokens.length);
         uint256 realRewardLength = 0;
