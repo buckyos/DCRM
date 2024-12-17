@@ -625,6 +625,10 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
     function withdrawDividends(uint256[] calldata cycleIndexs, address[] calldata tokens) external nonReentrant {
         require(cycleIndexs.length > 0, "No cycle index");
         require(tokens.length > 0, "No token");
+
+        // blacklisted address cannot estimate
+        require(!isBlackListed(msg.sender), "Blacklisted address");
+        
         // require(UserStakeRecords[msg.sender].length > 0, "No stake record");
 
         // Display the params
