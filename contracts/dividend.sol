@@ -118,12 +118,16 @@ contract DividendContract is Initializable, UUPSUpgradeable, ReentrancyGuardUpgr
         proposalContract = _proposalContract;
     }
 
-    function addBlacklist(address user) public onlyOwner {
-        blacklist[user] = true;
+    function addBlacklist(address[] calldata user) public onlyOwner {
+        for (uint i = 0; i < user.length; i++) {
+            blacklist[user[i]] = true;
+        }
     }
 
-    function removeBlacklist(address user) public onlyOwner {
-        blacklist[user] = false;
+    function removeBlacklist(address[] calldata user) public onlyOwner {
+        for (uint i = 0; i < user.length; i++) {
+            blacklist[user[i]] = false;
+        }
     }
 
     function isBlackListed(address user) public view returns (bool) {
